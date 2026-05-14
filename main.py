@@ -7,14 +7,20 @@ Pipeline:
   Phase 0: Reconnaissance (directory scan, language stats)
   Phase 1: Structure extraction (tree-sitter: symbols, calls, imports)
   Phase 2: Module-level LLM analysis (parallel)
+  Phase 2.5: Cross-module end-to-end flow extraction (sequence diagrams)
   Phase 3: Cross-module synthesis
-  Phase 4: Requirements reverse engineering → final document
+  Phase 4: Final document assembly
 
 Usage:
-  python main.py <repo_path> [--output <output.md>] [--lm-studio-url <url>]
-  python main.py <repo_path> --phase 0          # run only Phase 0
-  python main.py <repo_path> --phase 0-1        # run Phase 0 and 1
-  python main.py <repo_path> --phase 2-4        # run Phase 2-4 (needs Phase 0-1 done)
+  # Local LM Studio (default, no auth):
+  python main.py <repo_path>
+
+  # Remote Qwen / OpenAI-compatible endpoint:
+  python main.py <repo_path> --base-url https://your-server/v1 --api-key sk-xxx
+
+  # Run specific phases:
+  python main.py <repo_path> --phase 0-1
+  python main.py <repo_path> --phase 2-4
 """
 
 import argparse
@@ -566,15 +572,22 @@ def main():
     parser.add_argument("--output", "-o", help="Output document path (default: <repo>-analysis.md)")
     parser.add_argument("--phase", "-p", default="all",
                         help="Phase range: 0, 0-1, 2-4, all (default: all)")
-    parser.add_argument("--lm-studio-url", default="http://127.0.0.1:1234/v1",
-                        help="LM Studio API base URL")
+    parser.add_argument("--base-url", "--lm-studio-url",
+                        default="http://127.0.0.1:1234/v1",
+                        help="LLM API base URL (default: LM Studio local)")
+    parser.add_argument("--api-key", default=None,
+                        help="API key for remote LLM (or set LLM_API_KEY env var)")
     parser.add_argument("--model", "-m", default="qwen3.5-35b-a3b",
-                        help="Model name for LM Studio")
+                        help="Model name")
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Max source files to analyze (Phase 1)")
     parser.add_argument("--skip-synthesis", action="store_true",
                         help="Skip Phase 3 synthesis (use existing)")
     args = parser.parse_args()
+
+    # API key: CLI arg > env var
+    if not args.api_key:
+        args.api_key = os.environ.get("LLM_API_KEY")
 
     repo_path = Path(args.repo_path).resolve()
     if not repo_path.is_dir():
@@ -591,7 +604,8 @@ def main():
     print(f"\n  Repository: {repo_path}")
     print(f"  Output:     {args.output or f'{repo_name}-analysis.md'}")
     print(f"  Phases:     {phase_start} → {phase_end}")
-    print(f"  LLM:        {args.model} @ {args.lm_studio_url}")
+    print(f"  LLM:        {args.model} @ {args.base_url}" +
+          (f" (key={'***' + args.api_key[-4:] if args.api_key and len(args.api_key) > 4 else 'set'})" if args.api_key else ""))
     print()
 
     t_start = time.time()
@@ -612,8 +626,9 @@ def main():
     # ── Phases 2-4 need LLM ─────────────────────────────────────────────
     if phase_end >= 2:
         llm = LLMClient(
-            base_url=args.lm_studio_url,
+            base_url=args.base_url,
             model=args.model,
+            api_key=args.api_key,
         )
         print(f"\n  LLM health check: {'✓ OK' if llm.health_check() else '⚠ not reachable'}")
 
