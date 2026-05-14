@@ -1,0 +1,325 @@
+"""Prompt templates for 'rebuildable'-quality code analysis.
+
+First principle: The reverse-engineered documentation must be detailed enough
+that a developer, given only this document, could recreate a functionally
+equivalent project with < 5% deviation.
+"""
+
+# ── Phase 2: Module-level analysis ──────────────────────────────────────────
+
+MODULE_ANALYSIS_SYSTEM = """你是一位资深软件架构师和代码分析师。你的任务是对代码模块进行深度逆向分析。
+
+**核心原则**: 你生成的文档必须达到"可重建"级别 — 即一个有经验的开发者仅凭你的文档，就能重新实现一个功能基本等价的模块（误差 < 5%）。
+
+**分析要求**:
+1. 不要概括或省略细节 — 每个算法步骤、每个边界条件、每个异常处理路径都必须记录
+2. 不要只说"做了什么"，要说"怎么做" — 用伪代码级别的精确度描述实现逻辑
+3. 对于复杂逻辑，给出分步骤的实现描述
+4. 记录所有隐式假设和不变量
+5. 标注所有外部依赖的使用方式（不只是import了什么，而是怎么用的）
+
+**流程图要求** (核心改进):
+- 为每个核心业务流程生成 Mermaid flowchart
+- 流程图必须展示完整的决策分支和错误路径
+- 标注跨模块调用点（调用其他模块的函数时用特殊样式标记）
+
+**Mermaid 语法约束** (严格遵守):
+- 节点标签中禁止使用括号 () — Mermaid 会将其解析为圆角节点语法
+- 使用引号包裹标签: HTTP["HTTP/1.x src/http"] 而非 HTTP[HTTP/1.x (src/http)]
+- subgraph 必须有 ID: subgraph proto ["标题"] 而非 subgraph "标题"
+- 路径用空格替代括号: src/http 而非 (src/http)
+- 菱形判断节点用 {条件} 格式，不要用括号"""
+
+MODULE_ANALYSIS_USER = """## 仓库信息
+- 项目名称: {repo_name}
+- 模块路径: {module_path}
+- 模块包含 {file_count} 个源文件
+
+## 符号索引 (tree-sitter提取)
+{symbol_index}
+
+## 回调/函数指针信息 (间接调用关系)
+{callback_info}
+
+## 模块源码
+
+{source_code}
+
+---
+
+请按照以下结构输出分析（使用中文，技术术语保留英文）:
+
+### 1. 模块职责
+用1-3句话精确描述这个模块的核心职责。不要泛泛而谈，要说清楚它在系统中的具体角色。
+
+### 2. 核心业务流程图 (Mermaid flowchart)
+
+**这是最重要的部分。** 为模块的每个核心业务流程生成 Mermaid 流程图。
+
+格式要求:
+```
+### 2.X [流程名称]
+
+**输入**: [什么数据/事件触发这个流程]
+**输出**: [这个流程产生什么结果/副作用]
+
+```mermaid
+flowchart TD
+    A["触发: 接收 HTTP 请求"] --> B["解析请求行"]
+    B --> C{{解析成功?}}
+    C -->|是| D["解析请求头"]
+    C -->|否| E["返回 400 Bad Request"]
+    D --> F["调用 ngx_http_process_request_header"]
+    ...
+```
+
+**关键步骤说明**:
+1. [步骤1]: 详细解释做了什么，怎么判断
+2. [步骤2]: 详细解释
+...
+```
+
+要求:
+- 每个流程图至少包含 5 个节点，复杂流程应包含 15+ 节点
+- 必须展示错误路径和边界条件分支
+- 跨模块调用用注释标注: A["调用 event 模块: ngx_handle_read_event"]
+- 流程图下方必须有逐步的文字说明
+
+### 3. 公共接口清单
+列出所有对外暴露的函数/类/方法，包括:
+- 完整签名（参数类型、返回类型）
+- 功能描述（一句话）
+- 关键参数的取值范围和约束
+- 返回值的语义（特别是错误/空值情况）
+- 属于哪个业务流程（关联到 2.X 流程图）
+
+### 4. 核心算法与实现流程
+对每个核心功能，用以下格式描述:
+```
+功能名: [名称]
+输入: [精确描述 — 什么类型、什么来源、什么约束]
+处理: [详细步骤 — 每一步做什么、怎么判断、怎么转换]
+输出: [精确描述 — 什么类型、什么含义、什么格式]
+关键变量: [名称] — [含义] — [取值范围]
+不变量: [在整个流程中始终为真的条件]
+```
+
+### 5. 数据结构与模型
+描述模块中定义/使用的核心数据结构:
+- 字段名、类型、含义
+- 字段间的约束关系
+- 生命周期（何时创建、何时销毁）
+- 数据流转图 (如果结构复杂，用 Mermaid classDiagram)
+
+### 6. 异常处理与错误恢复
+- 每个 try/catch 或错误检查点
+- 错误传播路径
+- 降级策略（如果有）
+- 未处理的异常路径（潜在风险）
+
+### 7. 边界条件与约束
+- 空值/nil处理
+- 数值溢出/下溢
+- 并发安全性
+- 资源限制（内存、文件句柄、连接数等）
+- 序列化/反序列化边界
+
+### 8. 外部依赖使用模式
+不仅列出import了什么，还要描述:
+- 每个外部库的具体使用方式
+- 配置参数
+- 初始化顺序要求
+- 已知的坑或注意事项
+
+### 9. 设计决策与权衡
+- 为什么选择这种实现方式
+- 有什么trade-off
+- 如果要修改，哪些是关键约束"""
+
+# ── Phase 3: Cross-module synthesis ─────────────────────────────────────────
+
+SYNTHESIS_SYSTEM = """你是一位资深系统架构师。你的任务是基于各模块的分析结果，综合出整个系统的架构全景。
+
+**核心原则**: 文档要达到"可重建"级别 — 开发者据此能重建功能等价的系统。
+
+**要求**:
+1. 模块间的关系要精确 — 谁调用谁、数据怎么流动
+2. 识别系统的分层架构和模块边界
+3. 找出隐式的耦合和约定
+4. 标注跨模块的不变量
+
+**Mermaid 语法约束** (严格遵守):
+- 节点标签中禁止使用括号 `()` — Mermaid 会将其解析为圆角节点语法
+- 使用引号包裹标签: `HTTP["HTTP/1.x src/http"]` 而非 `HTTP[HTTP/1.x (src/http)]`
+- subgraph 必须有 ID: `subgraph proto ["标题"]` 而非 `subgraph "标题"`
+- 路径用空格替代括号: `src/http` 而非 `(src/http)`"""
+
+SYNTHESIS_USER = """## 项目: {repo_name}
+
+## 模块分析摘要
+{module_summaries}
+
+## 调用图 (关键边)
+{call_graph}
+
+## 依赖关系
+{import_graph}
+
+---
+
+请输出:
+
+### 1. 系统架构概述
+描述整体架构风格（微服务/单体/分层/管道等），以及为什么是这种架构。
+
+### 2. 分层与模块边界
+```
+[表示层] → [业务逻辑层] → [数据访问层] → [存储层]
+```
+每层的职责、层间接口、数据传递格式。
+
+### 3. 核心数据流
+描述系统中最重要的3-5条数据流:
+```
+数据流: [名称]
+触发: [什么事件触发]
+路径: [模块A] → [模块B] → [模块C]
+转换: [每个节点做什么转换]
+输出: [最终结果]
+```
+
+### 4. 模块间接口契约
+列出模块间的关键接口:
+- 调用方/被调用方
+- 数据格式
+- 错误处理约定
+- 时序要求
+
+### 5. 共享状态与并发
+- 全局/共享数据结构
+- 并发控制机制
+- 潜在的竞争条件
+
+### 6. 配置与初始化
+- 系统启动顺序
+- 配置加载流程
+- 依赖注入模式（如果有）
+
+### 7. 关键设计模式
+识别系统中使用的设计模式，以及为什么使用它们。"""
+
+# ── Phase 4: Requirements reverse engineering ────────────────────────────────
+
+REQUIREMENTS_SYSTEM = """你是一位需求分析师。你的任务是从代码分析中逆向推导出系统需求。
+
+**核心原则**: 产出的需求文档要达到"可重建"级别 — 开发者据此能重建功能等价的系统。
+
+**要求**:
+1. 区分功能需求和非功能需求
+2. 每个需求要可验证（有明确的验收标准）
+3. 标注需求的确定性级别（确定/高度可能/推断）"""
+
+REQUIREMENTS_USER = """## 项目: {repo_name}
+
+## 系统架构分析
+{architecture_analysis}
+
+## 模块详细分析
+{detailed_analyses}
+
+---
+
+请输出完整的需求逆向文档:
+
+# {repo_name} — 逆向工程文档
+
+## 1. 项目概述
+- 项目定位和目标（从代码推断）
+- 技术栈总结
+- 架构风格
+
+## 2. 功能需求
+按模块分组，每个需求包含:
+- FR-XXX: 需求编号
+- 描述: 系统做了什么
+- 验收标准: 怎么判断这个功能正确
+- 实现位置: 哪些模块/文件实现了这个需求
+- 确定性: 确定/高度可能/推断
+
+## 3. 非功能需求
+- 性能要求（从代码中的优化、缓存、异步等推断）
+- 安全要求（从认证、加密、输入校验等推断）
+- 可靠性（从重试、降级、事务等推断）
+- 可扩展性（从插件机制、配置化等推断）
+
+## 4. 数据模型
+- 核心实体及其关系
+- 数据库表结构（从SQL/ORM推断）
+- 数据流图
+
+## 5. API与接口
+- 外部API端点（从路由/控制器推断）
+- 内部模块接口
+- 消息格式
+
+## 6. 配置与部署
+- 配置项清单
+- 环境要求
+- 部署架构
+
+## 7. 模块详解
+每个模块的完整分析（从Phase 2结果整合）
+
+## 8. 重建指南
+如果要从零重建这个系统:
+- 推荐的实现顺序
+- 关键技术决策
+- 需要特别注意的坑
+- 可以参考的设计模式"""
+
+
+def render_module_prompt(
+    repo_name: str,
+    module_path: str,
+    file_count: int,
+    symbol_index: str,
+    source_code: str,
+    callback_info: str = "(无回调信息)",
+) -> tuple[str, str]:
+    """Render the module analysis system+user prompt pair."""
+    return MODULE_ANALYSIS_SYSTEM, MODULE_ANALYSIS_USER.format(
+        repo_name=repo_name,
+        module_path=module_path,
+        file_count=file_count,
+        symbol_index=symbol_index,
+        callback_info=callback_info,
+        source_code=source_code,
+    )
+
+
+def render_synthesis_prompt(
+    repo_name: str,
+    module_summaries: str,
+    call_graph: str,
+    import_graph: str,
+) -> tuple[str, str]:
+    """Render the cross-module synthesis prompt."""
+    return SYNTHESIS_SYSTEM, SYNTHESIS_USER.format(
+        repo_name=repo_name,
+        module_summaries=module_summaries,
+        call_graph=call_graph,
+        import_graph=import_graph,
+    )
+
+
+def render_requirements_prompt(
+    repo_name: str,
+    architecture_analysis: str,
+    detailed_analyses: str,
+) -> tuple[str, str]:
+    """Render the requirements reverse-engineering prompt."""
+    return REQUIREMENTS_SYSTEM, REQUIREMENTS_USER.format(
+        repo_name=repo_name,
+        architecture_analysis=architecture_analysis,
+        detailed_analyses=detailed_analyses,
+    )
