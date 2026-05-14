@@ -210,6 +210,9 @@ def run_phase25(
     
     try:
         response = llm.chat(system=system_prompt, user=user_prompt, max_tokens=8192)
+        # Fix Mermaid syntax issues from LLM output
+        from main import fix_mermaid_syntax
+        response = fix_mermaid_syntax(response)
         out_file = analysis_dir / "cross_flows.md"
         with open(out_file, "w") as f:
             f.write(response)
