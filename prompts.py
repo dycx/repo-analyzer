@@ -109,6 +109,9 @@ MODULE_ANALYSIS_USER = """## 仓库信息
 ## 回调/函数指针信息 (间接调用关系)
 {callback_info}
 
+## 模块关联的输出点 (已识别)
+{output_points}
+
 ## XML/Spark 分析信息 (如适用)
 如果模块包含 XML 配置文件或 Spark SQL，请特别关注:
 - XML 中的 SQL 语句：识别表名、函数调用、数据流
@@ -127,8 +130,20 @@ MODULE_ANALYSIS_USER = """## 仓库信息
 
 ### 1. 模块职责
 用1-3句话精确描述这个模块的核心职责。不要泛泛而谈，要说清楚它在系统中的具体角色。
+如果模块关联了输出点（见上方"模块关联的输出点"），以输出为核心描述：这个模块负责产出什么。
 
-### 2. 核心业务流程图 (Mermaid flowchart)
+### 2. 输入→输出 流程概览
+以输出为起点，追溯完整的数据处理链路：
+
+**输出**: [输出名称] @ [位置]
+**输入来源**:
+| 输入 | 类型 | 来源位置 | 如何参与处理 |
+|------|------|----------|-------------|
+
+**处理链路** (简述):
+输入A → [步骤1: 做什么] → [步骤2: 做什么] → 输出
+
+### 3. 核心业务流程图 (Mermaid flowchart)
 
 **这是最重要的部分。** 为模块的每个核心业务流程生成 Mermaid 流程图。
 
@@ -419,6 +434,7 @@ def render_module_prompt(
     symbol_index: str,
     source_code: str,
     callback_info: str = "(无回调信息)",
+    output_points: str = "(无关联输出点)",
 ) -> tuple[str, str]:
     """Render the module analysis system+user prompt pair."""
     return MODULE_ANALYSIS_SYSTEM, MODULE_ANALYSIS_USER.format(
@@ -427,6 +443,7 @@ def render_module_prompt(
         file_count=file_count,
         symbol_index=symbol_index,
         callback_info=callback_info,
+        output_points=output_points,
         source_code=source_code,
     )
 

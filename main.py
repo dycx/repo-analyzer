@@ -419,11 +419,30 @@ def build_callback_info(mod: dict) -> str:
     return "\n".join(lines) if lines else "(无回调信息)"
 
 
+def _build_output_points_for_module(mod: dict, outputs: list[dict]) -> str:
+    # Build a description of output points associated with this module's files.
+    if not outputs:
+        return "(无关联输出点)"
+    mod_files = {f.get("path", "") for f in mod.get("files", [])}
+    related = []
+    for out in outputs:
+        if out.get("file", "") in mod_files:
+            conf_icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(out.get("confidence", ""), "⚪")
+            related.append(
+                f"  - {conf_icon} `{out['name']}` ({out['output_type']}) @ "
+                f"{out['file']}:{out['line']} — {out.get('evidence', '')}"
+            )
+    if not related:
+        return "(无关联输出点)"
+    return "\n".join(related)
+
+
 def run_phase2(
     repo_path: str,
     analysis_dir: Path,
     llm: LLMClient,
     repo_name: str,
+    identified_outputs: list[dict] = None,
 ) -> dict[str, str]:
     """Run Phase 2: module-level LLM analysis."""
     print(f"\n[Phase 2] Module-level analysis (using {llm.model}) ...")
@@ -470,6 +489,7 @@ def run_phase2(
         file_count = len(files)
         callback_info = build_callback_info(mod)
 
+        output_points_str = _build_output_points_for_module(mod, identified_outputs or [])
         system_prompt, user_prompt = render_module_prompt(
             repo_name=repo_name,
             module_path=mod_name,
@@ -477,6 +497,7 @@ def run_phase2(
             symbol_index=symbol_index,
             source_code=source_code,
             callback_info=callback_info,
+            output_points=output_points_str,
         )
 
         try:
@@ -743,6 +764,31 @@ def run_phase4(
             dest.write_text(content, encoding="utf-8")
         print(f"  Modules  → {dest_modules}/ ({len(list(dest_modules.glob('*.md')))} files)")
 
+    # Generate IO flow document (input→output flow analysis)
+    outputs_file = analysis_dir / "outputs.json"
+    if outputs_file.exists():
+        import json as _json
+        with open(outputs_file, encoding="utf-8") as f:
+            identified_outputs = _json.load(f)
+
+        if identified_outputs:
+            from output_identification import generate_io_flow_document
+            io_md = generate_io_flow_document(
+                identified_outputs, normalized_modules, repo_name,
+            )
+            io_md = fix_mermaid_syntax(io_md)
+
+            # Write IO flow markdown
+            io_md_path = out_path.parent / f"{repo_name}-io-flows.md"
+            io_md_path.write_text(io_md, encoding="utf-8")
+            print(f"  IO Flows → {io_md_path} ({len(io_md):,} chars)")
+
+            # Generate IO flow HTML
+            io_html = generate_html_report(io_md, f"{repo_name} IO Flows", llm.model)
+            io_html_path = out_path.parent / f"{repo_name}-io-flows.html"
+            io_html_path.write_text(io_html, encoding="utf-8")
+            print(f"  IO HTML  → {io_html_path} ({len(io_html):,} chars)")
+
     return final
 
 
@@ -884,6 +930,40 @@ def main():
     if phase_start <= 1 <= phase_end:
         struct_summary = run_phase1(str(repo_path), str(analysis_dir), args.max_files)
 
+    # ── Phase 1.5: Output Identification ────────────────────────────────
+    identified_outputs = []
+    if phase_start <= 1 and phase_end >= 2:
+        from output_identification import identify_outputs
+        print(f"\n[Phase 1.5] Output identification ...")
+        # Collect all module data for cross-referencing
+        modules_dir = analysis_dir / "modules"
+        phase1_module_data = []
+        if modules_dir.exists():
+            import json as _json
+            for f in sorted(modules_dir.glob("*.json")):
+                with open(f, encoding="utf-8") as fh:
+                    phase1_module_data.append(_json.load(fh))
+
+        struct_data_for_outputs = {}
+        struct_file = analysis_dir / "structure.json"
+        if struct_file.exists():
+            with open(struct_file, encoding="utf-8") as f:
+                struct_data_for_outputs = _json.load(f)
+
+        identified_outputs = identify_outputs(
+            str(repo_path), struct_data_for_outputs, phase1_module_data,
+        )
+
+        # Save outputs to analysis dir
+        outputs_file = analysis_dir / "outputs.json"
+        with open(outputs_file, "w", encoding="utf-8") as f:
+            _json.dump(identified_outputs, f, ensure_ascii=False, indent=2)
+        print(f"  Saved {len(identified_outputs)} outputs → {outputs_file}")
+    elif (analysis_dir / "outputs.json").exists():
+        import json as _json
+        with open(analysis_dir / "outputs.json", encoding="utf-8") as f:
+            identified_outputs = _json.load(f)
+
     # ── Phases 2-4 need LLM ─────────────────────────────────────────────
     if phase_end >= 2:
         llm = LLMClient(
@@ -901,6 +981,7 @@ def main():
         if phase_start <= 2 <= phase_end:
             module_analyses = run_phase2(
                 str(repo_path), analysis_dir, llm, repo_name,
+                identified_outputs=identified_outputs,
             )
         else:
             # Load existing analyses
