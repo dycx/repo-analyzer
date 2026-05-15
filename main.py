@@ -158,7 +158,7 @@ def fix_mermaid_syntax(content: str) -> str:
     Problems fixed:
     1. Unquoted parentheses in node labels: NODE[text (stuff)] → NODE["text stuff"]
     2. Unquoted parentheses in edge labels: -->|text (stuff)| → -->|text stuff|
-    3. Bare parentheses in edge arrows: -- "text (stuff) " --> -- "text stuff" -->
+    3. Bare parentheses in edge arrows: -- "text (stuff)" --> -- "text stuff" -->
     4. Assignment in diamond labels: {"x = true"} → {"x is true"}
     5. Assignment in square labels: ["x = true"] → ["set x to true"]
     6. break without matching end → inject end
@@ -166,6 +166,9 @@ def fix_mermaid_syntax(content: str) -> str:
     8. Nested quotes in sequence diagram messages: func(a="b") → func(a=b)
     9. subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
     10. URL protocol in labels: ["https://x"] → ["x"]
+    11. Reserved word "end" as label: A["end"] → A["End"]
+    12. Node IDs starting with o/x after ---: A---ops → A--- ops
+    13. Semicolons in sequence messages: func(a;b) → func(a#59;b)
 
     Mermaid interprets () as rounded-node syntax, so any literal parentheses
     in labels must be inside quoted strings or removed.
@@ -252,7 +255,33 @@ def fix_mermaid_syntax(content: str) -> str:
                     line,
                 )
 
-                # 7. Fix subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
+                # 7. Fix reserved word "end" used as label
+                #    A["end"] → A["End"]  (capitalize to avoid reserved word)
+                line = re.sub(
+                    r'(\w+)\["end"\]',
+                    lambda m: f'{m.group(1)}["End"]',
+                    line,
+                )
+                line = re.sub(
+                    r'(\w+)\("end"\)',
+                    lambda m: f'{m.group(1)}("End")',
+                    line,
+                )
+                line = re.sub(
+                    r"(\w+)\{'end'\}",
+                    lambda m: f'{m.group(1)}{{"End"}}',
+                    line,
+                )
+
+                # 8. Fix node IDs starting with o/x after --- (circle/cross edge trap)
+                #    A---ops → A--- ops
+                line = re.sub(
+                    r'(---+)([ox][a-z])',
+                    lambda m: f'{m.group(1)} {m.group(2)}',
+                    line,
+                )
+
+                # 9. Fix subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
                 if re.match(r'\s*subgraph\s+"', line):
                     sg_counter += 1
                     line = re.sub(
@@ -262,14 +291,22 @@ def fix_mermaid_syntax(content: str) -> str:
                     )
 
             elif mermaid_type == "sequence":
-                # 8. Fix nested quotes in messages: func(a="b") → func(a=b)
+                # 10. Fix nested quotes in messages: func(a="b") → func(a=b)
                 line = re.sub(
                     r'(->>|-->>)\s*(.*)\s*=\s*"([^"]*)"',
                     lambda m: f'{m.group(1)} {m.group(2)}={m.group(3)}',
                     line,
                 )
 
-                # 9. Track open blocks for sequence diagrams
+                # 11. Escape semicolons in messages (they act as line breaks)
+                if ':' in line and not line.strip().startswith('%%'):
+                    line = re.sub(
+                        r'(->>|-->>|->>|-->>)([^:]+):.*;(.*)',
+                        lambda m: m.group(0).replace(';', '#59;'),
+                        line,
+                    )
+
+                # 12. Track open blocks for sequence diagrams
                 block_start = re.match(
                     r'\s*(alt|opt|loop|break|par)\b', stripped
                 )

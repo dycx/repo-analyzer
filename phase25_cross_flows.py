@@ -58,7 +58,39 @@ CROSS_FLOW_SYSTEM = """你是一位资深系统架构师。你的任务是从代
    ❌ 展示完整的回调注册链路
 
 8. **participant 用 as 别名，标签用引号**:
-   ✅ `participant A as "HTTP Module"`  ❌ `participant HTTP_Module`"""
+   ✅ `participant A as "HTTP Module"`  ❌ `participant HTTP_Module`
+
+9. **嵌套块规则** — 所有块类型可互相嵌套，每层必须有 end:
+   ```
+   alt condition
+       loop every second
+           A->>B: poll
+           opt has_data
+               B-->>A: response
+           end
+       end
+   else error
+       break fatal
+           A->>B: abort
+       end
+   end
+   ```
+
+10. **实体编码** — 特殊字符必须转义:
+    `#quot;` = `"`  `#59;` = `;`  `#amp;` = `&`
+
+11. **分号陷阱** — 消息中的 `;` 会被解析为换行符，必须转义:
+    ✅ `A->>B: config #59; key=value`  ❌ `A->>B: config; key=value`
+
+12. **rect 块** — 用于背景高亮:
+    ```
+    rect rgb(200, 255, 200)
+        A->>B: highlighted flow
+    end
+    ```
+
+13. **line break** — 消息和注释中用 `<br/>` 换行:
+    ✅ `Note over A,B: line1<br/>line2`"""
 
 CROSS_FLOW_USER = """## 项目: {repo_name}
 
