@@ -113,10 +113,12 @@ CROSS_FLOW_USER = """## 项目: {repo_name}
 3. 只展示跨模块调用 — 模块内部的函数调用不要出现在时序图中
 
 **简化原则** (核心):
-- **participants ≤ 6** — 用模块名而非函数名作为参与者
-- **消息 ≤ 15 条** — 合并同一模块内的多个步骤为一条消息
+- **participants ≤ 5** — 用模块名而非函数名作为参与者
+- **消息 ≤ 10 条** — 大幅合并，每个模块只保留 1-2 条关键消息
 - **内部步骤用 Note 补充** — 不要拆成独立消息
 - **回调链路简化** — 只展示最终分发目标，不展示注册过程
+- **标签 ≤ 20 字符** — 去掉参数详情，只保留函数名
+- **用 `<details>` 折叠标签包裹每个时序图**
 
 **输出格式** (每个流程):
 
@@ -126,18 +128,23 @@ CROSS_FLOW_USER = """## 项目: {repo_name}
 **涉及模块**: [模块1, 模块2, ...]
 **最终输出**: [结果/副作用]
 
-```mermaid
+<details>
+<summary>流程名称 (N messages)</summary>
+
+\`\`\`mermaid
 sequenceDiagram
     participant A as "ModuleA"
     participant B as "ModuleB"
     participant C as "ModuleC"
     
-    A->>B: main_handler(request)
-    Note right of B: validate, parse, route
-    B->>C: process(backend_req)
-    C-->>B: response
+    A->>B: handle(req)
+    Note right of B: validate, route
+    B->>C: process(req)
+    C-->>B: resp
     B-->>A: result
-```
+\`\`\`
+
+</details>
 
 **关键步骤说明**:
 1. [步骤1]: 解释

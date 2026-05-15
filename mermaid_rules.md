@@ -345,9 +345,49 @@ autonumber 10 5                (start at 10, increment by 5)
 
 ---
 
-## 3. Rules for LLM Code Generation (consolidated)
+## 3. Diagram Size Optimization
 
-### 3.1 Flowchart generation rules
+Large diagrams are unreadable. Apply these rules to keep diagrams compact.
+
+### 3.1 Flowchart size control
+
+- **Node count**: ≤ 12 per diagram
+- **If > 12 nodes**: split into 2-3 sub-diagrams, each covering one sub-phase
+- **Direction**: use `flowchart LR` (left-right) to save vertical space
+- **Label length**: ≤ 15 characters per node label
+- **Merge linear chains**: if A→B→C with no branches, merge to A["B then C"]
+- **Omit trivial paths**: don't show every simple straight-through path
+
+### 3.2 Sequence diagram size control
+
+- **Participants**: ≤ 5 (module-level, not function-level)
+- **Messages**: ≤ 10 (merge aggressively)
+- **Label length**: ≤ 20 characters, remove parameter details
+- **Show only cross-module calls**: intra-module calls belong in flowcharts
+
+### 3.3 Collapsible diagrams
+
+Wrap every mermaid block in HTML `<details>` tags:
+
+```
+<details>
+<summary>Flowchart: HTTP Request Handling (8 edges)</summary>
+
+```mermaid
+flowchart LR
+    ...
+```
+
+</details>
+```
+
+This lets readers expand only the diagrams they need.
+
+---
+
+## 4. Rules for LLM Code Generation (consolidated)
+
+### 4.1 Flowchart generation rules
 
 1. **Labels with special chars MUST be quoted**: `A["text (info)"]`
 2. **NEVER use `=` in labels**: rephrase as natural language
@@ -359,7 +399,7 @@ autonumber 10 5                (start at 10, increment by 5)
 8. **No URLs with protocol**: remove `https://`
 9. **Entity codes for special chars**: `#quot;` `#amp;` `#lt;` `#gt;` `#59;`
 
-### 3.2 Sequence diagram generation rules
+### 4.2 Sequence diagram generation rules
 
 1. **participants ≤ 6** — use module-level names, merge related functions
 2. **messages ≤ 15** — merge internal steps into Notes

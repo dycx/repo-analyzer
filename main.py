@@ -318,10 +318,73 @@ def fix_mermaid_syntax(content: str) -> str:
                     open_blocks.pop()
 
     fixed = '\n'.join(result)
+
+    # Wrap each mermaid block in <details> for collapsibility
+    fixed = _wrap_mermaid_in_details(fixed)
+
     orig_mermaid = content.count('```mermaid')
     if fixed != content:
         print(f"  [Mermaid fix] {orig_mermaid} blocks processed, syntax issues auto-corrected")
     return fixed
+
+
+def _wrap_mermaid_in_details(content: str) -> str:
+    # Wrap each mermaid code block in <details> tags for collapsibility.
+    # Only wraps blocks NOT already inside <details>.
+    import re
+    lines = content.split('\n')
+    result = []
+    i = 0
+    details_depth = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if '<details' in stripped:
+            details_depth += 1
+        if '</details>' in stripped:
+            details_depth = max(0, details_depth - 1)
+
+        if stripped.startswith('```mermaid') and details_depth == 0:
+            block_lines = [line]
+            i += 1
+            diagram_type = stripped.replace('```mermaid', '').strip()
+            edge_count = 0
+            msg_count = 0
+
+            while i < len(lines):
+                bline = lines[i]
+                block_lines.append(bline)
+                bstripped = bline.strip()
+                if 'flowchart' in diagram_type or 'graph ' in diagram_type:
+                    if '-->' in bstripped or '-.->' in bstripped or '==>' in bstripped:
+                        edge_count += 1
+                elif 'sequenceDiagram' in diagram_type:
+                    if '->>' in bstripped or '-->>' in bstripped:
+                        msg_count += 1
+                if bstripped == '```':
+                    break
+                i += 1
+
+            if msg_count > 0:
+                title = f"Sequence Diagram ({msg_count} messages)"
+            elif edge_count > 0:
+                title = f"Flowchart ({edge_count} edges)"
+            else:
+                title = "Mermaid Diagram"
+
+            result.append('<details>')
+            result.append(f'<summary>{title}</summary>')
+            result.append('')
+            result.extend(block_lines)
+            result.append('')
+            result.append('</details>')
+        else:
+            result.append(line)
+        i += 1
+
+    return '\n'.join(result)
 
 
 def build_callback_info(mod: dict) -> str:
