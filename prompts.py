@@ -91,6 +91,14 @@ MODULE_ANALYSIS_USER = """## 仓库信息
 ## 回调/函数指针信息 (间接调用关系)
 {callback_info}
 
+## XML/Spark 分析信息 (如适用)
+如果模块包含 XML 配置文件或 Spark SQL，请特别关注:
+- XML 中的 SQL 语句：识别表名、函数调用、数据流
+- UDF 定义：从 Scala/Java 代码中识别 UDF 注册和实现
+- Spark 内置函数 vs 自定义 UDF 的区分
+- XML 配置与 Scala/Java 加载代码的关联关系
+- 数据处理管道：输入表 → 转换逻辑 → 输出表
+
 ## 模块源码
 
 {source_code}
