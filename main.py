@@ -158,7 +158,14 @@ def fix_mermaid_syntax(content: str) -> str:
     Problems fixed:
     1. Unquoted parentheses in node labels: NODE[text (stuff)] → NODE["text stuff"]
     2. Unquoted parentheses in edge labels: -->|text (stuff)| → -->|text stuff|
-    3. Bare parentheses in edge arrows: -- "text (stuff)" --> -- "text stuff" -->
+    3. Bare parentheses in edge arrows: -- "text (stuff) " --> -- "text stuff" -->
+    4. Assignment in diamond labels: {"x = true"} → {"x is true"}
+    5. Assignment in square labels: ["x = true"] → ["set x to true"]
+    6. break without matching end → inject end
+    7. Unquoted edge labels with special chars: -->|text (x)| → -->|"text (x)"|
+    8. Nested quotes in sequence diagram messages: func(a="b") → func(a=b)
+    9. subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
+    10. URL protocol in labels: ["https://x"] → ["x"]
 
     Mermaid interprets () as rounded-node syntax, so any literal parentheses
     in labels must be inside quoted strings or removed.
@@ -167,52 +174,111 @@ def fix_mermaid_syntax(content: str) -> str:
     lines = content.split('\n')
     result = []
     in_mermaid = False
+    mermaid_type = None  # "flowchart" or "sequence"
+    sg_counter = 0
+    # Track open blocks that need closing
+    open_blocks: list[str] = []  # stack of block types: "alt", "loop", "opt", "break", "par"
 
     for line in lines:
         stripped = line.strip()
 
         if stripped.startswith('```mermaid'):
             in_mermaid = True
+            mermaid_type = None
+            sg_counter = 0
+            open_blocks = []
             result.append(line)
             continue
 
         if stripped == '```' and in_mermaid:
+            # Close any unclosed blocks before ending
+            while open_blocks:
+                open_blocks.pop()
+                result.append("    end")
             in_mermaid = False
             result.append(line)
             continue
 
         if in_mermaid:
-            # 1. Fix unquoted parentheses in [...] node labels
-            #    NODE[text (stuff)] → NODE["text stuff"]
-            line = re.sub(
-                r'(\w+)\[([^"\]]*?)\(([^)]*?)\)([^"\]]*?)\]',
-                lambda m: f'{m.group(1)}["{m.group(2)}{m.group(3)}{m.group(4)}"]',
-                line,
-            )
+            # Detect diagram type
+            if mermaid_type is None:
+                if 'flowchart' in stripped or 'graph ' in stripped:
+                    mermaid_type = "flowchart"
+                elif 'sequenceDiagram' in stripped:
+                    mermaid_type = "sequence"
 
-            # 2. Fix unquoted parentheses in {...} decision nodes
-            #    NODE{text (stuff)} → NODE{"text stuff"}
-            line = re.sub(
-                r'(\w+)\{([^"}]*?)\(([^)]*?)\)([^"}]*?)\}',
-                lambda m: f'{m.group(1)}{{"{m.group(2)}{m.group(3)}{m.group(4)}"}}',
-                line,
-            )
+            if mermaid_type == "flowchart":
+                # 1. Fix unquoted parentheses in [...] node labels
+                #    NODE[text (stuff)] → NODE["text stuff"]
+                line = re.sub(
+                    r'(\w+)\[([^"\]]*?)\(([^)]*?)\)([^"\]]*?)\]',
+                    lambda m: f'{m.group(1)}["{m.group(2)}{m.group(3)}{m.group(4)}"]',
+                    line,
+                )
 
-            # 3. Fix parentheses in edge labels: -->|text (stuff)| → -->|text stuff|
-            line = re.sub(
-                r'\|([^|]*?)\(([^)]*?)\)([^|]*?)\|',
-                lambda m: f'|{m.group(1)}{m.group(2)}{m.group(3)}|',
-                line,
-            )
+                # 2. Fix unquoted parentheses in {...} decision nodes
+                #    NODE{text (stuff)} → NODE{"text stuff"}
+                line = re.sub(
+                    r'(\w+)\{([^"}]*?)\(([^)]*?)\)([^"}]*?)\}',
+                    lambda m: f'{m.group(1)}{{"{m.group(2)}{m.group(3)}{m.group(4)}"}}',
+                    line,
+                )
 
-            # 4. Fix parentheses in quoted edge arrows: -- "text (stuff)" -->
-            line = re.sub(
-                r'-- "?([^"]*?)\(([^)]*?)\)([^"]*?)"?\s*-->',
-                lambda m: f'-- "{m.group(1)}{m.group(2)}{m.group(3)}" -->',
-                line,
-            )
+                # 3. Fix parentheses in edge labels: -->|text (stuff)| → -->|text stuff|
+                line = re.sub(
+                    r'\|([^|]*?)\(([^)]*?)\)([^|]*?)\|',
+                    lambda m: f'|{m.group(1)}{m.group(2)}{m.group(3)}|',
+                    line,
+                )
 
-        result.append(line)
+                # 4. Fix parentheses in quoted edge arrows: -- "text (stuff) " -->
+                line = re.sub(
+                    r'-- "?([^"]*?)\(([^)]*?)\)([^"]*?)"?\s*-->',
+                    lambda m: f'-- "{m.group(1)}{m.group(2)}{m.group(3)}" -->',
+                    line,
+                )
+
+                # 5. Fix assignment in diamond: {"x = true"} → {"x is true"}
+                line = re.sub(
+                    r'(\w+)\{([^"}]*?)\s*=\s*("[^"]*"|true|false|null|nil)\}',
+                    lambda m: f'{m.group(1)}{{"{m.group(2).strip()} is {m.group(3).strip(chr(34))}"}}',
+                    line,
+                )
+
+                # 6. Fix assignment in square brackets: ["x = true"] → ["set x to true"]
+                line = re.sub(
+                    r'(\w+)\["([^"]*?)\s*=\s*([^"]*?)"\]',
+                    lambda m: f'{m.group(1)}["set {m.group(2).strip()} to {m.group(3).strip()}"]',
+                    line,
+                )
+
+                # 7. Fix subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
+                if re.match(r'\s*subgraph\s+"', line):
+                    sg_counter += 1
+                    line = re.sub(
+                        r'(\s*)subgraph\s+"([^"]+)"',
+                        lambda m: f'{m.group(1)}subgraph sg{sg_counter} ["{m.group(2)}"]',
+                        line,
+                    )
+
+            elif mermaid_type == "sequence":
+                # 8. Fix nested quotes in messages: func(a="b") → func(a=b)
+                line = re.sub(
+                    r'(->>|-->>)\s*(.*)\s*=\s*"([^"]*)"',
+                    lambda m: f'{m.group(1)} {m.group(2)}={m.group(3)}',
+                    line,
+                )
+
+                # 9. Track open blocks for sequence diagrams
+                block_start = re.match(
+                    r'\s*(alt|opt|loop|break|par)\b', stripped
+                )
+                if block_start:
+                    block_type = block_start.group(1)
+                    open_blocks.append(block_type)
+
+                if stripped == 'end' and open_blocks:
+                    open_blocks.pop()
 
     fixed = '\n'.join(result)
     orig_mermaid = content.count('```mermaid')

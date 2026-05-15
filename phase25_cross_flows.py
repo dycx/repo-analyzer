@@ -22,11 +22,43 @@ CROSS_FLOW_SYSTEM = """你是一位资深系统架构师。你的任务是从代
 - 每一步做了什么转换/处理
 - 最终输出了什么
 
-**Mermaid 语法约束** (严格遵守):
-- 节点标签中禁止使用括号 () — Mermaid 会将其解析为圆角节点语法
-- 使用引号包裹标签: participant C as "Client"
-- 路径用空格替代括号: src/http 而非 (src/http)
-- 消息标签中不要用特殊字符"""
+**Mermaid Sequence Diagram 语法约束 (严格遵守，违反将导致渲染失败):**
+
+1. **participants 数量 ≤ 6** — 超过则合并为模块级别:
+   ✅ `participant HTTP as "HTTP Module"` (模块级)
+   ❌ `participant A as "ngx_http_init"` (函数级，太细)
+
+2. **消息数 ≤ 15 条** — 超过则合并内部步骤:
+   ✅ `Client->>HTTP: process_request(req)` (合并)
+   ❌ 8 条消息分别展示 parse/validate/cache/check... (太细)
+   - 内部细节用 `Note right of X: description` 补充
+
+3. **只展示跨模块调用** — 模块内部调用用 flowchart 展示，时序图只画模块边界:
+   ✅ `HTTP->>Event: add_read_event(c)`
+   ❌ `HTTP->>HTTP: parse_header()` (同模块内部调用)
+
+4. **消息标签禁止嵌套引号**:
+   ✅ `A->>B: func(arg=value)`  ❌ `A->>B: func(arg="value")`
+
+5. **break 必须有匹配的 end**:
+   ✅ `break error` / `end`  ❌ `break error` (缺 end)
+   - break 块内至少 1 条消息
+
+6. **alt/else 必须有匹配的 end**:
+   ```
+   alt success
+       ...
+   else error
+       ...
+   end
+   ```
+
+7. **回调/函数指针简化为模块级调度**:
+   ✅ `Event->>Handler: via dispatch_table.process_event`
+   ❌ 展示完整的回调注册链路
+
+8. **participant 用 as 别名，标签用引号**:
+   ✅ `participant A as "HTTP Module"`  ❌ `participant HTTP_Module`"""
 
 CROSS_FLOW_USER = """## 项目: {repo_name}
 
@@ -43,41 +75,40 @@ CROSS_FLOW_USER = """## 项目: {repo_name}
 
 请识别这个系统中最重要的 3-5 个端到端业务流程，为每个流程生成 Mermaid 时序图。
 
-**要求**:
-1. 选择最核心的业务流程（如: HTTP请求处理、配置加载、Worker进程启动等）
-2. 每个流程必须跨越至少 2 个模块
-3. 时序图必须展示完整的调用链，包括回调/函数指针的间接调用
-4. 每个消息箭头必须标注具体函数名（不要泛化为"处理请求"）
-5. 在关键分支点标注条件
+**选择标准**:
+1. 最核心的业务流程（如: 请求处理、配置加载、Worker启动等）
+2. 必须跨越至少 2 个模块
+3. 只展示跨模块调用 — 模块内部的函数调用不要出现在时序图中
+
+**简化原则** (核心):
+- **participants ≤ 6** — 用模块名而非函数名作为参与者
+- **消息 ≤ 15 条** — 合并同一模块内的多个步骤为一条消息
+- **内部步骤用 Note 补充** — 不要拆成独立消息
+- **回调链路简化** — 只展示最终分发目标，不展示注册过程
 
 **输出格式** (每个流程):
 
 ## 流程 X: [流程名称]
 
-**触发条件**: [什么事件/输入触发这个流程]
+**触发条件**: [什么事件/输入触发]
 **涉及模块**: [模块1, 模块2, ...]
-**最终输出**: [这个流程完成后的结果/副作用]
+**最终输出**: [结果/副作用]
 
 ```mermaid
 sequenceDiagram
-    participant A as "模块A"
-    participant B as "模块B"
-    participant C as "模块C"
+    participant A as "ModuleA"
+    participant B as "ModuleB"
+    participant C as "ModuleC"
     
-    A->>B: 具体函数名(params)
-    Note right of B: 做什么处理
-    B->>C: 具体函数名(params)
-    alt 成功路径
-        C-->>B: 返回结果
-        B-->>A: 返回结果
-    else 错误路径
-        C-->>B: 错误码
-        B-->>A: 错误处理
-    end
+    A->>B: main_handler(request)
+    Note right of B: validate, parse, route
+    B->>C: process(backend_req)
+    C-->>B: response
+    B-->>A: result
 ```
 
-**逐步说明**:
-1. [步骤1]: 详细解释这一步做了什么，输入是什么，输出是什么
+**关键步骤说明**:
+1. [步骤1]: 解释
 2. [步骤2]: ...
 
 ---
