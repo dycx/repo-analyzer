@@ -327,9 +327,26 @@ def _basic_md_to_html(content: str) -> str:
 def _convert_md_to_html(content: str) -> str:
     """Convert markdown to HTML, using `markdown` library if available."""
     if HAS_MARKDOWN:
-        extensions = ["tables", "fenced_code", "codehilite", "toc", "attr_list"]
+        # GFM-compatible extensions (GitHub Flavored Markdown)
+        extensions = [
+            "tables",          # GFM tables
+            "fenced_code",     # GFM fenced code blocks
+            "codehilite",      # Syntax highlighting
+            "toc",             # Auto-generated heading anchors
+            "attr_list",       # Attribute lists
+            "sane_lists",      # Better list handling (CommonMark-compatible)
+            "smarty",          # Smart quotes/dashes
+            "md_in_html",      # Markdown inside HTML blocks
+        ]
+        ext_configs = {
+            "codehilite": {"css_class": "highlight", "guess_lang": True},
+            "toc": {"permalink": False, "title": ""},
+        }
         try:
-            return md_lib.markdown(content, extensions=extensions)
+            return md_lib.markdown(
+                content, extensions=extensions, extension_configs=ext_configs,
+                output_format="html5",
+            )
         except Exception:
             pass
     return _basic_md_to_html(content)
@@ -417,13 +434,16 @@ def generate_html_report(md_content: str, repo_name: str, model: str) -> str:
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Reverse engineering analysis report for {safe_repo}">
+<meta name="generator" content="repo-analyzer">
 <title>{safe_repo} — Analysis Report</title>
 <style>
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
 :root {{
+  color-scheme: light dark;
   --sidebar-bg: #1a1a2e;
   --sidebar-text: #a0a0b8;
   --sidebar-active: #ffffff;
@@ -438,7 +458,15 @@ def generate_html_report(md_content: str, repo_name: str, model: str) -> str:
   --sidebar-w: 280px;
 }}
 
-html {{ scroll-behavior: smooth; }}
+html {{
+  scroll-behavior: smooth;
+  scroll-padding-top: 24px;
+}}
+
+/* Anchor offset for fixed header */
+h1[id], h2[id], h3[id], h4[id], h5[id], h6[id] {{
+  scroll-margin-top: 24px;
+}}
 
 body {{
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
@@ -453,7 +481,11 @@ body {{
 }}
 
 /* CJK support */
-:lang(zh), :lang(ja), :lang(ko) {{ line-break: strict; }}
+:lang(zh), :lang(ja), :lang(ko) {{
+  word-break: break-all;
+  line-break: anywhere;
+  text-autospace: ideograph-alpha ideograph-numeric;
+}}
 
 /* Sidebar */
 .sidebar {{
@@ -683,25 +715,47 @@ img {{ max-width: 100%; border-radius: 6px; margin: 0.5em 0; }}
 
 /* Footer */
 .report-footer {{
-  margin-top: 4em;
-  padding-top: 1.5em;
+  margin-left: var(--sidebar-w);
+  padding: 1.5em 48px 2em;
   border-top: 1px solid var(--border);
   font-size: 13px;
   color: var(--text-secondary);
+  transition: margin-left 0.3s ease;
+}}
+
+.content.expanded ~ .report-footer {{
+  margin-left: 0;
 }}
 
 /* Scrollbar */
+.sidebar {{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
+}}
 .sidebar::-webkit-scrollbar {{ width: 4px; }}
 .sidebar::-webkit-scrollbar-thumb {{ background: rgba(255,255,255,0.15); border-radius: 2px; }}
+
+/* Keyboard navigation */
+:focus-visible {{
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}}
+
+.toc-item:focus-visible {{
+  outline-color: var(--sidebar-active);
+}}
 
 /* Print */
 @media print {{
   .sidebar, .sidebar-toggle {{ display: none !important; }}
   .content {{ margin-left: 0 !important; padding: 20px !important; max-width: 100% !important; }}
+  .report-footer {{ margin-left: 0 !important; padding: 1em 20px !important; }}
   pre {{ white-space: pre-wrap; word-wrap: break-word; }}
   table {{ font-size: 12px; }}
   h1, h2, h3 {{ page-break-after: avoid; }}
   details {{ break-inside: avoid; }}
+  details[open] {{ break-inside: auto; }}
 }}
 
 /* Responsive */
@@ -709,6 +763,7 @@ img {{ max-width: 100%; border-radius: 6px; margin: 0.5em 0; }}
   .sidebar {{ transform: translateX(calc(-1 * var(--sidebar-w))); }}
   .sidebar.open {{ transform: translateX(0); }}
   .content {{ margin-left: 0; padding: 24px 20px 60px; }}
+  .report-footer {{ margin-left: 0; padding: 1.5em 20px 2em; }}
   .sidebar-toggle {{ display: flex; }}
 }}
 </style>
@@ -729,17 +784,17 @@ img {{ max-width: 100%; border-radius: 6px; margin: 0.5em 0; }}
 
 <main class="content" id="mainContent">
 {body_html}
+</main>
 
 <footer class="report-footer">
   <p>Report generated on {generated_at} using <strong>{safe_model}</strong></p>
 </footer>
-</main>
 
 <script>
 // Sidebar toggle
 const sidebar = document.getElementById('sidebar');
 const toggle = document.getElementById('sidebarToggle');
-const content = document.getElementById('mainContent');
+const mainContent = document.getElementById('mainContent');
 let sidebarOpen = window.innerWidth > 900;
 
 function updateSidebar() {{
@@ -747,7 +802,7 @@ function updateSidebar() {{
     sidebar.classList.toggle('open', sidebarOpen);
   }} else {{
     sidebar.classList.toggle('collapsed', !sidebarOpen);
-    content.classList.toggle('expanded', !sidebarOpen);
+    mainContent.classList.toggle('expanded', !sidebarOpen);
     toggle.classList.toggle('shifted', sidebarOpen);
   }}
 }}
@@ -786,13 +841,17 @@ tocItems.forEach(item => {{
 }});
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" async></script>
 <script>
-mermaid.initialize({{
-  startOnLoad: true,
-  theme: 'default',
-  securityLevel: 'loose',
-  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+document.addEventListener('DOMContentLoaded', () => {{
+  if (typeof mermaid !== 'undefined') {{
+    mermaid.initialize({{
+      startOnLoad: true,
+      theme: 'default',
+      securityLevel: 'loose',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }});
+  }}
 }});
 </script>
 
