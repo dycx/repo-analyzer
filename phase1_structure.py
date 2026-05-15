@@ -54,6 +54,108 @@ SKIP_DIRS = {
     "third_party", "external", "deps", ".cache",
 }
 
+# ── Test file detection ─────────────────────────────────────────────────────
+
+# Directory names that indicate test code
+TEST_DIRS = {
+    "test", "tests", "testing", "__tests__", "spec", "specs",
+    "test_fixtures", "testdata", "test_data", "test-resources",
+    "src/test", "src/tests",
+}
+
+# File name patterns (regex) that indicate test files
+_TEST_FILE_PATTERNS = [
+    # Python: pytest / unittest
+    re.compile(r'^test_\w+\.py$'),
+    re.compile(r'^\w+_test\.py$'),
+    re.compile(r'^tests?\.py$'),
+    # Java / Scala: JUnit / TestNG / ScalaTest
+    re.compile(r'^\w+Test\.java$'),
+    re.compile(r'^\w+Tests\.java$'),
+    re.compile(r'^\w+Spec\.scala$'),
+    re.compile(r'^\w+Test\.scala$'),
+    re.compile(r'^\w+Suite\.scala$'),
+    # JavaScript / TypeScript: Jest / Mocha / Vitest
+    re.compile(r'^\w+\.test\.(js|ts|jsx|tsx)$'),
+    re.compile(r'^\w+\.spec\.(js|ts|jsx|tsx)$'),
+    re.compile(r'^\w+[-_]test\.(js|ts)$'),
+    # Go
+    re.compile(r'^\w+_test\.go$'),
+    # Rust
+    re.compile(r'^test_\w+\.rs$'),
+    # C / C++: Google Test / Catch2
+    re.compile(r'^\w+_test\.(c|cpp|cc|cxx)$'),
+    re.compile(r'^\w+_tests\.(c|cpp|cc|cxx)$'),
+    re.compile(r'^test_\w+\.(c|cpp|cc|cxx)$'),
+    # Ruby: RSpec / Minitest
+    re.compile(r'^\w+_spec\.rb$'),
+    re.compile(r'^\w+_test\.rb$'),
+    # PHP: PHPUnit
+    re.compile(r'^\w+Test\.php$'),
+]
+
+# File extensions commonly used for test files
+_TEST_EXTENSIONS = {
+    ".test.js", ".test.ts", ".test.jsx", ".test.tsx",
+    ".spec.js", ".spec.ts", ".spec.jsx", ".spec.tsx",
+    ".test.py", ".spec.py",
+}
+
+# Inline markers in source code that indicate test code
+_TEST_CODE_MARKERS = {
+    "python": ["import unittest", "import pytest", "from unittest", "from pytest",
+               "@pytest.fixture", "@pytest.mark", "def test_", "class Test"],
+    "java": ["@Test", "@BeforeEach", "@AfterEach", "@BeforeAll", "@AfterAll",
+             "import org.junit", "import org.testng", "import static org.junit"],
+    "scala": ["import org.scalatest", "import org.specs2",
+              "class.*Spec.*extends", "class.*Suite.*extends"],
+    "javascript": ["describe(", "it(", "test(", "expect(",
+                   "import.*from.*jest", "import.*from.*vitest"],
+    "go": ['import.*testing"', "func Test"],
+    "rust": ["#[test]", "#[cfg(test)]"],
+    "ruby": ["require.*rspec", "describe.*do", "RSpec.describe"],
+}
+
+
+def is_test_file(filepath: str, content: str = None) -> bool:
+    """Detect if a file is a test file based on path, name, and optionally content.
+
+    Uses multiple signals:
+    1. Directory path contains a test directory name
+    2. File name matches test patterns
+    3. File extension matches test extensions
+    4. Content contains test framework markers (if content provided)
+    """
+    # Normalize path separators
+    normalized = filepath.replace("\\", "/")
+    parts = normalized.split("/")
+    fname = parts[-1] if parts else filepath
+
+    # Check if inside a test directory
+    for part in parts[:-1]:
+        if part.lower() in TEST_DIRS:
+            return True
+
+    # Check file name patterns
+    for pattern in _TEST_FILE_PATTERNS:
+        if pattern.match(fname):
+            return True
+
+    # Check file extensions
+    ext_lower = fname[fname.rfind("."):] if "." in fname else ""
+    if ext_lower in _TEST_EXTENSIONS:
+        return True
+
+    # Check content markers
+    if content:
+        content_lower = content.lower()[:5000]  # only check first 5KB
+        for lang_markers in _TEST_CODE_MARKERS.values():
+            for marker in lang_markers:
+                if marker.lower() in content_lower:
+                    return True
+
+    return False
+
 
 # ── Data classes ─────────────────────────────────────────────────────────────
 
@@ -855,8 +957,15 @@ def analyze_file(filepath: str, repo_root: str) -> FileAnalysis:
     )
 
 
-def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5000) -> dict:
+def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5000,
+               skip_tests: bool = False) -> dict:
     """Run Phase 1 structure extraction on all source files.
+
+    Args:
+        repo_path: path to the repository
+        output_dir: output directory for analysis data
+        max_files: maximum number of files to analyze
+        skip_tests: if True, skip test files (auto-detects pytest, JUnit, Jest, etc.)
 
     Returns a summary dict with all extracted data.
     """
@@ -885,6 +994,25 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
                 source_files.append(fpath)
 
     print(f"  Found {len(source_files)} source files")
+
+    # Filter out test files if requested
+    if skip_tests:
+        original_count = len(source_files)
+        filtered = []
+        for fpath in source_files:
+            try:
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(5000)  # read first 5KB for marker detection
+                rel = os.path.relpath(fpath, str(root))
+                if not is_test_file(rel, content):
+                    filtered.append(fpath)
+            except (OSError, PermissionError):
+                filtered.append(fpath)  # keep if can't read
+        source_files = filtered
+        skipped = original_count - len(source_files)
+        print(f"  Skipped {skipped} test files (--skip-tests)")
+        print(f"  Remaining: {len(source_files)} files")
+
     if len(source_files) > max_files:
         print(f"  Capping at {max_files} files")
         source_files = source_files[:max_files]

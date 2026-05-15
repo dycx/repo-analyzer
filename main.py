@@ -890,6 +890,8 @@ def main():
                         help="LLM request timeout in seconds (default: 300)")
     parser.add_argument("--retry", type=int, default=3,
                         help="Max retries on LLM request failure (default: 3)")
+    parser.add_argument("--skip-tests", action="store_true", default=False,
+                        help="Skip test files during analysis (auto-detects pytest, JUnit, Jest, Go test, etc.)")
     args = parser.parse_args()
 
     # API key: CLI arg > env var
@@ -928,7 +930,8 @@ def main():
 
     # ── Phase 1: Structure extraction ────────────────────────────────────
     if phase_start <= 1 <= phase_end:
-        struct_summary = run_phase1(str(repo_path), str(analysis_dir), args.max_files)
+        struct_summary = run_phase1(str(repo_path), str(analysis_dir), args.max_files,
+                                    skip_tests=args.skip_tests)
 
     # ── Phase 1.5: Output Identification ────────────────────────────────
     identified_outputs = []
