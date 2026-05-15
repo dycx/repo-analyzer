@@ -772,6 +772,10 @@ def main():
                         help="Max source files to analyze (Phase 1)")
     parser.add_argument("--skip-synthesis", action="store_true",
                         help="Skip Phase 3 synthesis (use existing)")
+    parser.add_argument("--timeout", "-t", type=float, default=300.0,
+                        help="LLM request timeout in seconds (default: 300)")
+    parser.add_argument("--retry", type=int, default=3,
+                        help="Max retries on LLM request failure (default: 3)")
     args = parser.parse_args()
 
     # API key: CLI arg > env var
@@ -818,6 +822,8 @@ def main():
             base_url=args.base_url,
             model=args.model,
             api_key=args.api_key,
+            timeout=args.timeout,
+            max_retries=args.retry,
         )
         print(f"\n  LLM health check: {'✓ OK' if llm.health_check() else '⚠ not reachable'}")
 

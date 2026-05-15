@@ -78,6 +78,7 @@ class LLMClient:
         temperature: float = 0.1,
         max_tokens: int = 8192,
         timeout: float = 300.0,
+        max_retries: int = 3,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -85,6 +86,7 @@ class LLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.max_retries = max_retries
 
     def _headers(self) -> dict[str, str]:
         """Build HTTP headers, including auth when api_key is set."""
@@ -97,18 +99,38 @@ class LLMClient:
         """POST to /chat/completions and return parsed JSON.
 
         Handles both plain JSON and SSE-formatted responses transparently.
+        Retries on transient failures (timeout, connection, 5xx).
         """
-        resp = httpx.post(
-            f"{self.base_url}/chat/completions",
-            json=payload,
-            headers=self._headers(),
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        text = resp.text
-        if _is_sse(text):
-            return _parse_sse_response(text)
-        return resp.json()
+        import time as _time
+        last_err = None
+        for attempt in range(self.max_retries):
+            try:
+                resp = httpx.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers=self._headers(),
+                    timeout=self.timeout,
+                )
+                resp.raise_for_status()
+                text = resp.text
+                if _is_sse(text):
+                    return _parse_sse_response(text)
+                return resp.json()
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                last_err = e
+                if attempt < self.max_retries - 1:
+                    wait = 2 ** attempt
+                    print(f"  [retry {attempt+1}/{self.max_retries}] {type(e).__name__}, waiting {wait}s ...")
+                    _time.sleep(wait)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500 and attempt < self.max_retries - 1:
+                    last_err = e
+                    wait = 2 ** attempt
+                    print(f"  [retry {attempt+1}/{self.max_retries}] HTTP {e.response.status_code}, waiting {wait}s ...")
+                    _time.sleep(wait)
+                else:
+                    raise
+        raise last_err
 
     def chat(
         self,
@@ -150,7 +172,7 @@ class LLMClient:
             resp = httpx.get(
                 f"{self.base_url}/models",
                 headers=self._headers(),
-                timeout=5,
+                timeout=min(15, self.timeout),
             )
             return resp.status_code == 200
         except Exception:
