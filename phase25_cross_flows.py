@@ -103,6 +103,13 @@ CROSS_FLOW_USER = """## 项目: {repo_name}
 ## 分派表/回调注册 (C函数指针模式)
 {dispatch_tables}
 
+## Phase 1 结构化验证数据 (Ground Truth)
+{structured_context}
+
+以下数据来自 Phase 1 的精确结构分析（tree-sitter 提取），是**已验证的事实**。
+你生成的流程图中涉及的调用关系、表引用、UDF 必须与以下数据一致。
+如果某个调用关系在下方数据中不存在，标注为"推测"而非确认。
+
 ---
 
 请识别这个系统中最重要的 3-5 个端到端业务流程，为每个流程生成 Mermaid 时序图。
@@ -250,44 +257,113 @@ def run_phase25(
                     dt_lines.append(f"  - {r['field']} = {r['func']}")
             dispatch_str = "\n".join(dt_lines)
     
-    # Build module summaries
-    summaries = []
-    for mod_name, analysis in module_analyses.items():
-        summary = analysis[:800]
-        if len(analysis) > 800:
-            summary += "..."
-        summaries.append(f"### {mod_name}\n{summary}")
-    module_summaries = "\n\n".join(summaries)
-    
-    # Also load per-module callback data
+    # Load per-module data (structure + Phase 2 analyses)
     modules_dir = analysis_dir / "modules"
     module_data = []
     if modules_dir.exists():
         for f in sorted(modules_dir.glob("*.json")):
             with open(f, encoding="utf-8") as fh:
                 module_data.append(json.load(fh))
-    
+
+    # Build ground truth from Phase 1
+    from cross_validation import (
+        build_ground_truth, build_structured_context,
+        validate_cross_module_calls, build_validation_summary,
+    )
+    ground_truth = build_ground_truth(struct_data, module_data)
+
+    # Build structured context (replaces truncated text summaries)
+    structured_ctx = build_structured_context(struct_data, module_data, ground_truth)
+
+    # Build module analysis summaries (expanded: 2000 chars instead of 800)
+    summaries = []
+    for mod_name, analysis in module_analyses.items():
+        # Extract key sections: 职责, 公共接口, 核心流程
+        summary = _extract_key_sections(analysis, max_chars=2000)
+        summaries.append(f"### {mod_name}\n{summary}")
+    module_summaries = "\n\n".join(summaries)
+
     callback_summary = build_callback_summary(module_data)
-    
-    # Call LLM
+
+    # Call LLM with structured ground truth
     system_prompt = CROSS_FLOW_SYSTEM
     user_prompt = CROSS_FLOW_USER.format(
         repo_name=repo_name,
         call_graph=call_graph_str,
         module_summaries=module_summaries,
         dispatch_tables=dispatch_str + "\n\n" + callback_summary,
+        structured_context=structured_ctx,
     )
-    
+
     try:
         response = llm.chat(system=system_prompt, user=user_prompt, max_tokens=8192)
-        # Fix Mermaid syntax issues from LLM output
         from main import fix_mermaid_syntax
         response = fix_mermaid_syntax(response)
+
+        # Cross-validate against ground truth
+        validation = validate_cross_module_calls(response, ground_truth)
+        val_summary = build_validation_summary(validation)
+        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy "
+              f"({len(validation.verified_calls)}/{len(validation.verified_calls) + len(validation.unverified_calls)} verified)")
+
+        if validation.unverified_calls:
+            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls detected — "
+                  f"appending validation report")
+
+        # Append validation report to output
+        response_with_val = response + "\n\n---\n\n" + val_summary
+
         out_file = analysis_dir / "cross_flows.md"
         with open(out_file, "w", encoding="utf-8") as f:
-            f.write(response)
-        print(f"  Cross-module flows → {out_file} ({len(response)} chars)")
-        return response
+            f.write(response_with_val)
+        print(f"  Cross-module flows → {out_file} ({len(response_with_val)} chars)")
+        return response_with_val
     except Exception as e:
         print(f"  ERROR: {e}")
         return f"[cross-flow extraction failed: {e}]"
+
+
+def _extract_key_sections(analysis: str, max_chars: int = 2000) -> str:
+    # Extract key sections from module analysis for context building.
+    # Prioritizes: 模块职责, 公共接口, 核心流程图, 核心算法
+    lines = analysis.split("\n")
+    sections = []
+    current_section = []
+    current_header = ""
+    priority_headers = [
+        "模块职责", "公共接口", "核心业务流程", "核心算法", "数据结构",
+        "module responsibility", "public interface", "core flow", "core algorithm",
+    ]
+
+    for line in lines:
+        if line.strip().startswith("#"):
+            # Save previous section
+            if current_section and current_header:
+                is_priority = any(p in current_header.lower() for p in priority_headers)
+                sections.append((current_header, "\n".join(current_section), is_priority))
+            current_header = line.strip()
+            current_section = [line]
+        else:
+            current_section.append(line)
+
+    # Save last section
+    if current_section and current_header:
+        is_priority = any(p in current_header.lower() for p in priority_headers)
+        sections.append((current_header, "\n".join(current_section), is_priority))
+
+    # Sort: priority sections first
+    sections.sort(key=lambda x: (0 if x[2] else 1))
+
+    # Concatenate up to max_chars
+    result = []
+    total = 0
+    for header, content, _ in sections:
+        if total + len(content) > max_chars:
+            remaining = max_chars - total
+            if remaining > 200:
+                result.append(content[:remaining] + "...")
+            break
+        result.append(content)
+        total += len(content)
+
+    return "\n".join(result) if result else analysis[:max_chars]

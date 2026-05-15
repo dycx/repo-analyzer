@@ -534,16 +534,35 @@ def run_phase3(
                 ig_lines.append(f"  {imp['file']} imports {imp['source']}" + (f" from {module}" if module else ""))
             import_graph_str = "\n".join(ig_lines)
 
-    # Build module summaries
+    # Load per-module data for structured context
+    modules_dir = analysis_dir / "modules"
+    module_data = []
+    if modules_dir.exists():
+        for f in sorted(modules_dir.glob("*.json")):
+            with open(f, encoding="utf-8") as fh:
+                module_data.append(json.load(fh))
+
+    # Build ground truth and structured context
+    from cross_validation import (
+        build_ground_truth, build_structured_context,
+        validate_cross_module_calls, build_validation_summary,
+    )
+    struct_data_full = {}
+    if struct_file.exists():
+        with open(struct_file, encoding="utf-8") as f:
+            struct_data_full = json.load(f)
+    ground_truth = build_ground_truth(struct_data_full, module_data)
+    structured_ctx = build_structured_context(struct_data_full, module_data, ground_truth)
+
+    # Build expanded module summaries (2000 chars, key sections only)
+    from phase25_cross_flows import _extract_key_sections
     summaries = []
     for mod_name, analysis in module_analyses.items():
-        # Take first 500 chars as summary
-        summary = analysis[:500]
-        if len(analysis) > 500:
-            summary += "..."
+        summary = _extract_key_sections(analysis, max_chars=2000)
         summaries.append(f"### {mod_name}\n{summary}")
     module_summaries = "\n\n".join(summaries)
 
+    # Build synthesis prompt with structured ground truth
     system_prompt, user_prompt = render_synthesis_prompt(
         repo_name=repo_name,
         module_summaries=module_summaries,
@@ -551,14 +570,35 @@ def run_phase3(
         import_graph=import_graph_str,
     )
 
+    # Append structured ground truth to user prompt
+    user_prompt += (
+        "\n\n## Phase 1 结构化验证数据 (Ground Truth)\n"
+        + structured_ctx
+        + "\n\n以下数据来自 Phase 1 的精确结构分析（tree-sitter 提取），是**已验证的事实**。"
+        "你生成的架构分析中涉及的调用关系、模块依赖、表引用必须与以下数据一致。"
+        "如果某个关系在下方数据中不存在，标注为\"推测\"而非确认。\n"
+    )
+
     try:
         response = llm.chat(system=system_prompt, user=user_prompt, max_tokens=8192)
         response = fix_mermaid_syntax(response)
+
+        # Cross-validate
+        validation = validate_cross_module_calls(response, ground_truth)
+        val_summary = build_validation_summary(validation)
+        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy "
+              f"({len(validation.verified_calls)}/{len(validation.verified_calls) + len(validation.unverified_calls)} verified)")
+
+        if validation.unverified_calls:
+            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls")
+
+        response_with_val = response + "\n\n---\n\n" + val_summary
+
         out_file = analysis_dir / "synthesis.md"
         with open(out_file, "w", encoding="utf-8") as f:
-            f.write(response)
-        print(f"  Synthesis complete ({len(response)} chars) → {out_file}")
-        return response
+            f.write(response_with_val)
+        print(f"  Synthesis complete ({len(response_with_val)} chars) → {out_file}")
+        return response_with_val
     except Exception as e:
         print(f"  ERROR: {e}")
         return f"[synthesis failed: {e}]"
