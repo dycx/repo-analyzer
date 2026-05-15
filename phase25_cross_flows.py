@@ -22,11 +22,87 @@ CROSS_FLOW_SYSTEM = """你是一位资深系统架构师。你的任务是从代
 - 每一步做了什么转换/处理
 - 最终输出了什么
 
-**Mermaid 语法约束** (严格遵守):
-- 节点标签中禁止使用括号 () — Mermaid 会将其解析为圆角节点语法
-- 使用引号包裹标签: participant C as "Client"
-- 路径用空格替代括号: src/http 而非 (src/http)
-- 消息标签中不要用特殊字符"""
+**准确性要求** (最高优先级):
+- 每个时序图消息必须引用具体的函数名 @ 文件:行号
+- 只使用调用图中已验证的调用关系
+- 只引用符号索引中已存在的函数/类
+- 不确定的调用关系标注为 [推测]
+- 禁止编造不存在的函数或调用链
+
+**Chain-of-Thought** — 对每个流程：
+1. 观察: 从调用图中找到哪些跨模块边
+2. 推理: 这些边如何组成端到端流程
+3. 结论: 流程图 + 置信度
+
+**Mermaid Sequence Diagram 语法约束 (严格遵守，违反将导致渲染失败):**
+
+1. **participants 数量 ≤ 6** — 超过则合并为模块级别:
+   ✅ `participant HTTP as "HTTP Module"` (模块级)
+   ❌ `participant A as "ngx_http_init"` (函数级，太细)
+
+2. **消息数 ≤ 15 条** — 超过则合并内部步骤:
+   ✅ `Client->>HTTP: process_request(req)` (合并)
+   ❌ 8 条消息分别展示 parse/validate/cache/check... (太细)
+   - 内部细节用 `Note right of X: description` 补充
+
+3. **只展示跨模块调用** — 模块内部调用用 flowchart 展示，时序图只画模块边界:
+   ✅ `HTTP->>Event: add_read_event(c)`
+   ❌ `HTTP->>HTTP: parse_header()` (同模块内部调用)
+
+4. **消息标签禁止嵌套引号**:
+   ✅ `A->>B: func(arg=value)`  ❌ `A->>B: func(arg="value")`
+
+5. **break 必须有匹配的 end**:
+   ✅ `break error` / `end`  ❌ `break error` (缺 end)
+   - break 块内至少 1 条消息
+
+6. **alt/else 必须有匹配的 end**:
+   ```
+   alt success
+       ...
+   else error
+       ...
+   end
+   ```
+
+7. **回调/函数指针简化为模块级调度**:
+   ✅ `Event->>Handler: via dispatch_table.process_event`
+   ❌ 展示完整的回调注册链路
+
+8. **participant 用 as 别名，标签用引号**:
+   ✅ `participant A as "HTTP Module"`  ❌ `participant HTTP_Module`
+
+9. **嵌套块规则** — 所有块类型可互相嵌套，每层必须有 end:
+   ```
+   alt condition
+       loop every second
+           A->>B: poll
+           opt has_data
+               B-->>A: response
+           end
+       end
+   else error
+       break fatal
+           A->>B: abort
+       end
+   end
+   ```
+
+10. **实体编码** — 特殊字符必须转义:
+    `#quot;` = `"`  `#59;` = `;`  `#amp;` = `&`
+
+11. **分号陷阱** — 消息中的 `;` 会被解析为换行符，必须转义:
+    ✅ `A->>B: config #59; key=value`  ❌ `A->>B: config; key=value`
+
+12. **rect 块** — 用于背景高亮:
+    ```
+    rect rgb(200, 255, 200)
+        A->>B: highlighted flow
+    end
+    ```
+
+13. **line break** — 消息和注释中用 `<br/>` 换行:
+    ✅ `Note over A,B: line1<br/>line2`"""
 
 CROSS_FLOW_USER = """## 项目: {repo_name}
 
@@ -39,45 +115,58 @@ CROSS_FLOW_USER = """## 项目: {repo_name}
 ## 分派表/回调注册 (C函数指针模式)
 {dispatch_tables}
 
+## Phase 1 结构化验证数据 (Ground Truth)
+{structured_context}
+
+以下数据来自 Phase 1 的精确结构分析（tree-sitter 提取），是**已验证的事实**。
+你生成的流程图中涉及的调用关系、表引用、UDF 必须与以下数据一致。
+如果某个调用关系在下方数据中不存在，标注为"推测"而非确认。
+
 ---
 
 请识别这个系统中最重要的 3-5 个端到端业务流程，为每个流程生成 Mermaid 时序图。
 
-**要求**:
-1. 选择最核心的业务流程（如: HTTP请求处理、配置加载、Worker进程启动等）
-2. 每个流程必须跨越至少 2 个模块
-3. 时序图必须展示完整的调用链，包括回调/函数指针的间接调用
-4. 每个消息箭头必须标注具体函数名（不要泛化为"处理请求"）
-5. 在关键分支点标注条件
+**选择标准**:
+1. 最核心的业务流程（如: 请求处理、配置加载、Worker启动等）
+2. 必须跨越至少 2 个模块
+3. 只展示跨模块调用 — 模块内部的函数调用不要出现在时序图中
+
+**简化原则** (核心):
+- **participants ≤ 5** — 用模块名而非函数名作为参与者
+- **消息 ≤ 10 条** — 大幅合并，每个模块只保留 1-2 条关键消息
+- **内部步骤用 Note 补充** — 不要拆成独立消息
+- **回调链路简化** — 只展示最终分发目标，不展示注册过程
+- **标签 ≤ 20 字符** — 去掉参数详情，只保留函数名
+- **用 `<details>` 折叠标签包裹每个时序图**
 
 **输出格式** (每个流程):
 
 ## 流程 X: [流程名称]
 
-**触发条件**: [什么事件/输入触发这个流程]
+**触发条件**: [什么事件/输入触发]
 **涉及模块**: [模块1, 模块2, ...]
-**最终输出**: [这个流程完成后的结果/副作用]
+**最终输出**: [结果/副作用]
 
-```mermaid
+<details>
+<summary>流程名称 (N messages)</summary>
+
+\`\`\`mermaid
 sequenceDiagram
-    participant A as "模块A"
-    participant B as "模块B"
-    participant C as "模块C"
+    participant A as "ModuleA"
+    participant B as "ModuleB"
+    participant C as "ModuleC"
     
-    A->>B: 具体函数名(params)
-    Note right of B: 做什么处理
-    B->>C: 具体函数名(params)
-    alt 成功路径
-        C-->>B: 返回结果
-        B-->>A: 返回结果
-    else 错误路径
-        C-->>B: 错误码
-        B-->>A: 错误处理
-    end
-```
+    A->>B: handle(req)
+    Note right of B: validate, route
+    B->>C: process(req)
+    C-->>B: resp
+    B-->>A: result
+\`\`\`
 
-**逐步说明**:
-1. [步骤1]: 详细解释这一步做了什么，输入是什么，输出是什么
+</details>
+
+**关键步骤说明**:
+1. [步骤1]: 解释
 2. [步骤2]: ...
 
 ---
@@ -145,7 +234,7 @@ def run_phase25(
     dispatch_str = "(no dispatch tables)"
     
     if struct_file.exists():
-        with open(struct_file) as f:
+        with open(struct_file, encoding="utf-8") as f:
             struct_data = json.load(f)
         
         # Build call graph summary (direct + indirect)
@@ -180,44 +269,140 @@ def run_phase25(
                     dt_lines.append(f"  - {r['field']} = {r['func']}")
             dispatch_str = "\n".join(dt_lines)
     
-    # Build module summaries
-    summaries = []
-    for mod_name, analysis in module_analyses.items():
-        summary = analysis[:800]
-        if len(analysis) > 800:
-            summary += "..."
-        summaries.append(f"### {mod_name}\n{summary}")
-    module_summaries = "\n\n".join(summaries)
-    
-    # Also load per-module callback data
+    # Load per-module data (structure + Phase 2 analyses)
     modules_dir = analysis_dir / "modules"
     module_data = []
     if modules_dir.exists():
         for f in sorted(modules_dir.glob("*.json")):
-            with open(f) as fh:
+            with open(f, encoding="utf-8") as fh:
                 module_data.append(json.load(fh))
-    
+
+    # Build ground truth from Phase 1
+    from cross_validation import (
+        build_ground_truth, build_structured_context,
+        validate_cross_module_calls, build_validation_summary,
+    )
+    ground_truth = build_ground_truth(struct_data, module_data)
+
+    # Build structured context (replaces truncated text summaries)
+    structured_ctx = build_structured_context(struct_data, module_data, ground_truth)
+
+    # Build module analysis summaries (expanded: 2000 chars instead of 800)
+    summaries = []
+    for mod_name, analysis in module_analyses.items():
+        # Extract key sections: 职责, 公共接口, 核心流程
+        summary = _extract_key_sections(analysis, max_chars=2000)
+        summaries.append(f"### {mod_name}\n{summary}")
+    module_summaries = "\n\n".join(summaries)
+
     callback_summary = build_callback_summary(module_data)
-    
-    # Call LLM
+
+    # Call LLM with structured ground truth
     system_prompt = CROSS_FLOW_SYSTEM
     user_prompt = CROSS_FLOW_USER.format(
         repo_name=repo_name,
         call_graph=call_graph_str,
         module_summaries=module_summaries,
         dispatch_tables=dispatch_str + "\n\n" + callback_summary,
+        structured_context=structured_ctx,
     )
-    
+
     try:
         response = llm.chat(system=system_prompt, user=user_prompt, max_tokens=8192)
-        # Fix Mermaid syntax issues from LLM output
         from main import fix_mermaid_syntax
         response = fix_mermaid_syntax(response)
+
+        # Cross-validate against ground truth
+        validation = validate_cross_module_calls(response, ground_truth)
+        val_summary = build_validation_summary(validation)
+        verified = len(validation.verified_calls)
+        total = verified + len(validation.unverified_calls)
+        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy ({verified}/{total} verified)")
+
+        # Iterative refinement: if accuracy < 70% and there are unverified calls, re-generate
+        REFINE_THRESHOLD = 0.70
+        MAX_REFINEMENTS = 1
+        for refine_iter in range(MAX_REFINEMENTS):
+            if validation.accuracy_score >= REFINE_THRESHOLD or not validation.unverified_calls:
+                break
+
+            from accuracy import create_refinement_prompt
+            unverified_names = [c["name"] for c in validation.unverified_calls[:10]]
+            errors = [f"函数 `{n}` 在调用图和符号表中未找到" for n in unverified_names]
+
+            print(f"  [Refine {refine_iter+1}] Accuracy {validation.accuracy_score:.0%} < {REFINE_THRESHOLD:.0%}, "
+                  f"correcting {len(errors)} errors ...")
+
+            refine_prompt = create_refinement_prompt(response, errors, structured_ctx)
+            try:
+                response = llm.chat(system=CROSS_FLOW_SYSTEM, user=refine_prompt, max_tokens=8192)
+                response = fix_mermaid_syntax(response)
+                validation = validate_cross_module_calls(response, ground_truth)
+                val_summary = build_validation_summary(validation)
+                verified = len(validation.verified_calls)
+                total = verified + len(validation.unverified_calls)
+                print(f"  [Refine {refine_iter+1}] → {validation.accuracy_score:.0%} accuracy ({verified}/{total})")
+            except Exception as e:
+                print(f"  [Refine {refine_iter+1}] ERROR: {e}")
+                break
+
+        if validation.unverified_calls:
+            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls remaining")
+
+        # Append validation report to output
+        response_with_val = response + "\n\n---\n\n" + val_summary
+
         out_file = analysis_dir / "cross_flows.md"
-        with open(out_file, "w") as f:
-            f.write(response)
-        print(f"  Cross-module flows → {out_file} ({len(response)} chars)")
-        return response
+        with open(out_file, "w", encoding="utf-8") as f:
+            f.write(response_with_val)
+        print(f"  Cross-module flows → {out_file} ({len(response_with_val)} chars)")
+        return response_with_val
     except Exception as e:
         print(f"  ERROR: {e}")
         return f"[cross-flow extraction failed: {e}]"
+
+
+def _extract_key_sections(analysis: str, max_chars: int = 2000) -> str:
+    # Extract key sections from module analysis for context building.
+    # Prioritizes: 模块职责, 公共接口, 核心流程图, 核心算法
+    lines = analysis.split("\n")
+    sections = []
+    current_section = []
+    current_header = ""
+    priority_headers = [
+        "模块职责", "公共接口", "核心业务流程", "核心算法", "数据结构",
+        "module responsibility", "public interface", "core flow", "core algorithm",
+    ]
+
+    for line in lines:
+        if line.strip().startswith("#"):
+            # Save previous section
+            if current_section and current_header:
+                is_priority = any(p in current_header.lower() for p in priority_headers)
+                sections.append((current_header, "\n".join(current_section), is_priority))
+            current_header = line.strip()
+            current_section = [line]
+        else:
+            current_section.append(line)
+
+    # Save last section
+    if current_section and current_header:
+        is_priority = any(p in current_header.lower() for p in priority_headers)
+        sections.append((current_header, "\n".join(current_section), is_priority))
+
+    # Sort: priority sections first
+    sections.sort(key=lambda x: (0 if x[2] else 1))
+
+    # Concatenate up to max_chars
+    result = []
+    total = 0
+    for header, content, _ in sections:
+        if total + len(content) > max_chars:
+            remaining = max_chars - total
+            if remaining > 200:
+                result.append(content[:remaining] + "...")
+            break
+        result.append(content)
+        total += len(content)
+
+    return "\n".join(result) if result else analysis[:max_chars]

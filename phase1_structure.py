@@ -23,6 +23,7 @@ import tree_sitter_java as tsjava
 import tree_sitter_python as tspython
 import tree_sitter_scala as tsscala
 import tree_sitter_sql as tssql
+import tree_sitter_xml as tsxml
 from tree_sitter import Language, Parser
 
 # ── Language setup ───────────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ LANGUAGES = {
     "Python": Language(tspython.language()),
     "Scala": Language(tsscala.language()),
     "SQL": Language(tssql.language()),
+    "XML": Language(tsxml.language_xml()),
 }
 
 EXT_TO_LANG = {
@@ -43,6 +45,7 @@ EXT_TO_LANG = {
     ".scala": "Scala", ".sc": "Scala",
     ".py": "Python",
     ".sql": "SQL",
+    ".xml": "XML", ".xsd": "XML", ".xsl": "XML", ".xslt": "XML",
 }
 
 SKIP_DIRS = {
@@ -95,6 +98,7 @@ class FileAnalysis:
     imports: list[dict] = field(default_factory=list)
     calls: list[dict] = field(default_factory=list)
     sql_stmts: list[dict] = field(default_factory=list)
+    spark_cross_ref: list[dict] = field(default_factory=list)
     error: str = ""
 
 
@@ -614,6 +618,144 @@ def _extract_sql(tree, source: bytes, filepath: str) -> tuple[list[Symbol], list
     return symbols, imports, calls
 
 
+def _extract_xml(tree, source: bytes, filepath: str) -> tuple[list[Symbol], list[Import], list[CallEdge]]:
+    """Extract XML elements, attributes, embedded SQL, and UDF references."""
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from spark_analysis import extract_sql_functions, analyze_spark_sql
+
+    symbols = []
+    imports = []
+    calls = []
+    root = tree.root_node
+
+    # Walk XML tree and collect elements with their text content
+    def _walk(node, parent_path=""):
+        if node.type == "element":
+            # Get element name
+            name_node = None
+            for child in node.children:
+                if child.type == "STag":
+                    for sub in child.children:
+                        if sub.type == "Name":
+                            name_node = sub
+                            break
+                    break
+
+            if name_node:
+                elem_name = _node_text(name_node, source)
+                elem_path = f"{parent_path}/{elem_name}" if parent_path else elem_name
+
+                # Extract attributes
+                attrs = {}
+                for child in node.children:
+                    if child.type == "STag":
+                        for sub in child.children:
+                            if sub.type == "Attribute":
+                                attr_name = ""
+                                attr_val = ""
+                                for achild in sub.children:
+                                    if achild.type == "Name":
+                                        attr_name = _node_text(achild, source)
+                                    elif achild.type == "AttValue":
+                                        raw = _node_text(achild, source)
+                                        attr_val = raw.strip('"').strip("'")
+                                if attr_name:
+                                    attrs[attr_name] = attr_val
+
+                # Build signature from element + attributes
+                attr_str = ", ".join(f"{k}={v}" for k, v in attrs.items()) if attrs else ""
+                sig = f"<{elem_name}" + (f" {attr_str}" if attr_str else "") + ">"
+
+                symbols.append(Symbol(
+                    name=elem_name,
+                    kind="xml_element",
+                    file=filepath,
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    signature=sig[:500],
+                    parent=parent_path,
+                ))
+
+                # Extract text content for SQL analysis
+                text_content = ""
+                for child in node.children:
+                    if child.type == "content":
+                        for sub in child.children:
+                            if sub.type == "CharData":
+                                text_content += _node_text(sub, source)
+
+                text_content = text_content.strip()
+                if text_content and len(text_content) > 20:
+                    # Check if it looks like SQL
+                    first_word = text_content.split()[0].upper() if text_content.split() else ""
+                    if first_word in ("SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "WITH"):
+                        # Add as SQL symbol
+                        symbols.append(Symbol(
+                            name=f"SQL_{elem_name}_{node.start_point[0]+1}",
+                            kind="sql_in_xml",
+                            file=filepath,
+                            line=node.start_point[0] + 1,
+                            end_line=node.end_point[0] + 1,
+                            signature=text_content[:500],
+                            parent=elem_path,
+                        ))
+
+                        # Extract function calls from SQL
+                        sql_calls = extract_sql_functions(
+                            text_content, filepath, node.start_point[0]
+                        )
+                        for sc in sql_calls:
+                            calls.append(CallEdge(
+                                caller=elem_path,
+                                callee=sc.name,
+                                file=filepath,
+                                line=sc.line,
+                            ))
+
+                # Recurse into children
+                for child in node.children:
+                    _walk(child, elem_path)
+            else:
+                for child in node.children:
+                    _walk(child, parent_path)
+        elif node.type == "content":
+            for child in node.children:
+                _walk(child, parent_path)
+        elif node.type == "document":
+            for child in node.children:
+                _walk(child, parent_path)
+
+    _walk(root)
+    return symbols, imports, calls
+
+
+# Also detect UDF registrations and XML loaders in Scala/Java files
+def _extract_spark_cross_ref(filepath: str, source_text: str) -> dict:
+    """Extract Spark UDF definitions and XML loader references from Scala/Java."""
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from spark_analysis import detect_udfs_in_source, detect_xml_loaders
+
+    udfs = detect_udfs_in_source(filepath, source_text)
+    xml_loaders = detect_xml_loaders(filepath, source_text)
+
+    return {
+        "udfs": [
+            {"name": u.name, "class": u.class_name, "file": u.file,
+             "line": u.line, "type": u.registration_type}
+            for u in udfs
+        ],
+        "xml_loaders": [
+            {"xml_file": r.xml_file, "loader_file": r.loader_file,
+             "line": r.loader_line, "method": r.loader_method, "context": r.context}
+            for r in xml_loaders
+        ],
+    }
+
+
 EXTRACTORS = {
     "C": _extract_c_cpp,
     "C++": _extract_c_cpp,
@@ -621,6 +763,7 @@ EXTRACTORS = {
     "Python": _extract_python,
     "Scala": _extract_scala,
     "SQL": _extract_sql,
+    "XML": _extract_xml,
 }
 
 
@@ -691,12 +834,24 @@ def analyze_file(filepath: str, repo_root: str) -> FileAnalysis:
         except Exception:
             pass
 
+    # Spark cross-reference for Scala/Java files
+    spark_ref = []
+    if lang in ("Scala", "Java"):
+        try:
+            source_text = source.decode("utf-8", errors="ignore")
+            spark_data = _extract_spark_cross_ref(rel, source_text)
+            if spark_data.get("udfs") or spark_data.get("xml_loaders"):
+                spark_ref = [spark_data]
+        except Exception:
+            pass
+
     return FileAnalysis(
         path=rel, language=lang,
         symbols=[asdict(s) for s in syms],
         imports=[asdict(i) for i in imps],
         calls=[asdict(c) for c in calls],
         sql_stmts=sql_stmts,
+        spark_cross_ref=spark_ref,
     )
 
 
@@ -712,7 +867,7 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
     # Load metadata from Phase 0
     meta_file = out / "metadata.json"
     if meta_file.exists():
-        with open(meta_file) as f:
+        with open(meta_file, encoding="utf-8") as f:
             metadata = json.load(f)
     else:
         metadata = {}
@@ -807,7 +962,7 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
 
     # Save full analysis
     out_file = out / "structure.json"
-    with open(out_file, "w") as f:
+    with open(out_file, "w", encoding="utf-8") as f:
         json.dump({
             "summary": summary,
             "files": all_analysis,
@@ -841,7 +996,7 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
             "indirect_calls": [ic for ic in callback_data.get("indirect_calls", [])
                                if ic.get("file") in mod_files_set],
         }
-        with open(mod_file, "w") as f:
+        with open(mod_file, "w", encoding="utf-8") as f:
             json.dump({"module": mod_name, "files": files, "callbacks": mod_callbacks},
                       f, indent=1, ensure_ascii=False)
 

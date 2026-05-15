@@ -161,7 +161,7 @@ def run_phase0(repo_path: str, output_dir: str | None = None) -> dict:
 
     # Save
     out_file = out / "metadata.json"
-    with open(out_file, "w") as f:
+    with open(out_file, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
 
     # Print summary
