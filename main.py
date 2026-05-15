@@ -58,7 +58,7 @@ def load_module_data(analysis_dir: Path) -> list[dict]:
         return []
     result = []
     for f in sorted(modules_dir.glob("*.json")):
-        with open(f) as fh:
+        with open(f, encoding="utf-8") as fh:
             result.append(json.load(fh))
     return result
 
@@ -284,7 +284,7 @@ def run_phase2(
 
         # Skip if already analyzed (resume support)
         if out_file.exists():
-            with open(out_file) as f:
+            with open(out_file, encoding="utf-8") as f:
                 existing = f.read()
             if len(existing) > 200:  # non-trivial content
                 results[mod_name] = existing
@@ -320,7 +320,7 @@ def run_phase2(
             print(f" done ({elapsed:.1f}s, {len(response)} chars)")
 
             results[mod_name] = response
-            with open(out_file, "w") as f:
+            with open(out_file, "w", encoding="utf-8") as f:
                 f.write(response)
 
         except Exception as e:
@@ -347,7 +347,7 @@ def run_phase3(
     import_graph_str = "(no import graph)"
 
     if struct_file.exists():
-        with open(struct_file) as f:
+        with open(struct_file, encoding="utf-8") as f:
             struct_data = json.load(f)
 
         # Build call graph summary
@@ -388,7 +388,7 @@ def run_phase3(
         response = llm.chat(system=system_prompt, user=user_prompt, max_tokens=8192)
         response = fix_mermaid_syntax(response)
         out_file = analysis_dir / "synthesis.md"
-        with open(out_file, "w") as f:
+        with open(out_file, "w", encoding="utf-8") as f:
             f.write(response)
         print(f"  Synthesis complete ({len(response)} chars) → {out_file}")
         return response
@@ -614,7 +614,7 @@ def main():
     if phase_start <= 0 <= phase_end:
         metadata = run_phase0(str(repo_path), str(analysis_dir))
     elif (analysis_dir / "metadata.json").exists():
-        with open(analysis_dir / "metadata.json") as f:
+        with open(analysis_dir / "metadata.json", encoding="utf-8") as f:
             metadata = json.load(f)
     else:
         metadata = {}
@@ -644,7 +644,7 @@ def main():
             modules_out = analysis_dir / "module_analyses"
             if modules_out.exists():
                 for f in sorted(modules_out.glob("*.md")):
-                    with open(f) as fh:
+                    with open(f, encoding="utf-8") as fh:
                         mod_name = f.stem.replace("_", "/")
                         module_analyses[mod_name] = fh.read()
 
@@ -657,7 +657,7 @@ def main():
                 module_analyses,
             )
         elif (analysis_dir / "cross_flows.md").exists():
-            with open(analysis_dir / "cross_flows.md") as f:
+            with open(analysis_dir / "cross_flows.md", encoding="utf-8") as f:
                 cross_flows = f.read()
 
         # ── Phase 3: Synthesis ───────────────────────────────────────────
@@ -668,7 +668,7 @@ def main():
                 module_analyses,
             )
         elif (analysis_dir / "synthesis.md").exists():
-            with open(analysis_dir / "synthesis.md") as f:
+            with open(analysis_dir / "synthesis.md", encoding="utf-8") as f:
                 architecture = f.read()
 
         # ── Phase 4: Final document ──────────────────────────────────────

@@ -712,7 +712,7 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
     # Load metadata from Phase 0
     meta_file = out / "metadata.json"
     if meta_file.exists():
-        with open(meta_file) as f:
+        with open(meta_file, encoding="utf-8") as f:
             metadata = json.load(f)
     else:
         metadata = {}
@@ -807,7 +807,7 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
 
     # Save full analysis
     out_file = out / "structure.json"
-    with open(out_file, "w") as f:
+    with open(out_file, "w", encoding="utf-8") as f:
         json.dump({
             "summary": summary,
             "files": all_analysis,
@@ -841,7 +841,7 @@ def run_phase1(repo_path: str, output_dir: str | None = None, max_files: int = 5
             "indirect_calls": [ic for ic in callback_data.get("indirect_calls", [])
                                if ic.get("file") in mod_files_set],
         }
-        with open(mod_file, "w") as f:
+        with open(mod_file, "w", encoding="utf-8") as f:
             json.dump({"module": mod_name, "files": files, "callbacks": mod_callbacks},
                       f, indent=1, ensure_ascii=False)
 

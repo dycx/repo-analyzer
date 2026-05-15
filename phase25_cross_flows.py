@@ -145,7 +145,7 @@ def run_phase25(
     dispatch_str = "(no dispatch tables)"
     
     if struct_file.exists():
-        with open(struct_file) as f:
+        with open(struct_file, encoding="utf-8") as f:
             struct_data = json.load(f)
         
         # Build call graph summary (direct + indirect)
@@ -194,7 +194,7 @@ def run_phase25(
     module_data = []
     if modules_dir.exists():
         for f in sorted(modules_dir.glob("*.json")):
-            with open(f) as fh:
+            with open(f, encoding="utf-8") as fh:
                 module_data.append(json.load(fh))
     
     callback_summary = build_callback_summary(module_data)
@@ -214,7 +214,7 @@ def run_phase25(
         from main import fix_mermaid_syntax
         response = fix_mermaid_syntax(response)
         out_file = analysis_dir / "cross_flows.md"
-        with open(out_file, "w") as f:
+        with open(out_file, "w", encoding="utf-8") as f:
             f.write(response)
         print(f"  Cross-module flows → {out_file} ({len(response)} chars)")
         return response
