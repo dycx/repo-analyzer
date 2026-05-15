@@ -586,11 +586,39 @@ def run_phase3(
         # Cross-validate
         validation = validate_cross_module_calls(response, ground_truth)
         val_summary = build_validation_summary(validation)
-        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy "
-              f"({len(validation.verified_calls)}/{len(validation.verified_calls) + len(validation.unverified_calls)} verified)")
+        verified = len(validation.verified_calls)
+        total = verified + len(validation.unverified_calls)
+        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy ({verified}/{total} verified)")
+
+        # Iterative refinement
+        REFINE_THRESHOLD = 0.70
+        MAX_REFINEMENTS = 1
+        for refine_iter in range(MAX_REFINEMENTS):
+            if validation.accuracy_score >= REFINE_THRESHOLD or not validation.unverified_calls:
+                break
+
+            from accuracy import create_refinement_prompt
+            unverified_names = [c["name"] for c in validation.unverified_calls[:10]]
+            errors = [f"函数 `{n}` 在调用图和符号表中未找到" for n in unverified_names]
+
+            print(f"  [Refine {refine_iter+1}] Accuracy {validation.accuracy_score:.0%} < {REFINE_THRESHOLD:.0%}, "
+                  f"correcting {len(errors)} errors ...")
+
+            refine_prompt = create_refinement_prompt(response, errors, structured_ctx)
+            try:
+                response = llm.chat(system=system_prompt, user=refine_prompt, max_tokens=8192)
+                response = fix_mermaid_syntax(response)
+                validation = validate_cross_module_calls(response, ground_truth)
+                val_summary = build_validation_summary(validation)
+                verified = len(validation.verified_calls)
+                total = verified + len(validation.unverified_calls)
+                print(f"  [Refine {refine_iter+1}] → {validation.accuracy_score:.0%} accuracy ({verified}/{total})")
+            except Exception as e:
+                print(f"  [Refine {refine_iter+1}] ERROR: {e}")
+                break
 
         if validation.unverified_calls:
-            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls")
+            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls remaining")
 
         response_with_val = response + "\n\n---\n\n" + val_summary
 

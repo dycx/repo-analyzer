@@ -22,6 +22,18 @@ CROSS_FLOW_SYSTEM = """你是一位资深系统架构师。你的任务是从代
 - 每一步做了什么转换/处理
 - 最终输出了什么
 
+**准确性要求** (最高优先级):
+- 每个时序图消息必须引用具体的函数名 @ 文件:行号
+- 只使用调用图中已验证的调用关系
+- 只引用符号索引中已存在的函数/类
+- 不确定的调用关系标注为 [推测]
+- 禁止编造不存在的函数或调用链
+
+**Chain-of-Thought** — 对每个流程：
+1. 观察: 从调用图中找到哪些跨模块边
+2. 推理: 这些边如何组成端到端流程
+3. 结论: 流程图 + 置信度
+
 **Mermaid Sequence Diagram 语法约束 (严格遵守，违反将导致渲染失败):**
 
 1. **participants 数量 ≤ 6** — 超过则合并为模块级别:
@@ -303,12 +315,39 @@ def run_phase25(
         # Cross-validate against ground truth
         validation = validate_cross_module_calls(response, ground_truth)
         val_summary = build_validation_summary(validation)
-        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy "
-              f"({len(validation.verified_calls)}/{len(validation.verified_calls) + len(validation.unverified_calls)} verified)")
+        verified = len(validation.verified_calls)
+        total = verified + len(validation.unverified_calls)
+        print(f"  Cross-validation: {validation.accuracy_score:.0%} accuracy ({verified}/{total} verified)")
+
+        # Iterative refinement: if accuracy < 70% and there are unverified calls, re-generate
+        REFINE_THRESHOLD = 0.70
+        MAX_REFINEMENTS = 1
+        for refine_iter in range(MAX_REFINEMENTS):
+            if validation.accuracy_score >= REFINE_THRESHOLD or not validation.unverified_calls:
+                break
+
+            from accuracy import create_refinement_prompt
+            unverified_names = [c["name"] for c in validation.unverified_calls[:10]]
+            errors = [f"函数 `{n}` 在调用图和符号表中未找到" for n in unverified_names]
+
+            print(f"  [Refine {refine_iter+1}] Accuracy {validation.accuracy_score:.0%} < {REFINE_THRESHOLD:.0%}, "
+                  f"correcting {len(errors)} errors ...")
+
+            refine_prompt = create_refinement_prompt(response, errors, structured_ctx)
+            try:
+                response = llm.chat(system=CROSS_FLOW_SYSTEM, user=refine_prompt, max_tokens=8192)
+                response = fix_mermaid_syntax(response)
+                validation = validate_cross_module_calls(response, ground_truth)
+                val_summary = build_validation_summary(validation)
+                verified = len(validation.verified_calls)
+                total = verified + len(validation.unverified_calls)
+                print(f"  [Refine {refine_iter+1}] → {validation.accuracy_score:.0%} accuracy ({verified}/{total})")
+            except Exception as e:
+                print(f"  [Refine {refine_iter+1}] ERROR: {e}")
+                break
 
         if validation.unverified_calls:
-            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls detected — "
-                  f"appending validation report")
+            print(f"  ⚠ {len(validation.unverified_calls)} unverified calls remaining")
 
         # Append validation report to output
         response_with_val = response + "\n\n---\n\n" + val_summary
