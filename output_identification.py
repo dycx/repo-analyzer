@@ -448,9 +448,13 @@ def identify_outputs(
             seen_keys.add(key)
             all_outputs.append(output)
 
-    # Collect all source files
+    # Collect all source files (skip test dirs)
     source_files = []
     root = Path(repo_path)
+    skip_test_dirs = {
+        "test", "tests", "testing", "__tests__", "spec", "specs",
+        "test_fixtures", "testdata", "test_data", "test-resources",
+    }
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith('.') and d not in {
             '.git', 'node_modules', '__pycache__', '.venv', 'venv',
