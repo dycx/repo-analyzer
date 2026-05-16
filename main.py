@@ -479,6 +479,14 @@ def run_phase2(
     modules = auto_split_modules(modules, max_files=10)
     if len(modules) != original_count:
         print(f"  Auto-split: {original_count} modules → {len(modules)} modules (max 10 files each)")
+        # Clean old module analysis files to prevent stale content
+        modules_out_dir = analysis_dir / "module_analyses"
+        if modules_out_dir.exists():
+            old_files = list(modules_out_dir.glob("*.md"))
+            if old_files:
+                for old_file in old_files:
+                    old_file.unlink()
+                print(f"  Cleaned {len(old_files)} stale module files")
 
     print(f"  Found {len(modules)} modules to analyze")
 
