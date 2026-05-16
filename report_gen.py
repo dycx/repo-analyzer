@@ -841,9 +841,9 @@ tocItems.forEach(item => {{
 }});
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" async></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" defer></script>
 <script>
-document.addEventListener('DOMContentLoaded', () => {{
+document.addEventListener('DOMContentLoaded', function() {{
   if (typeof mermaid !== 'undefined') {{
     mermaid.initialize({{
       startOnLoad: true,
