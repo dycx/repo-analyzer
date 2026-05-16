@@ -475,8 +475,8 @@ def identify_outputs(
                 rel = os.path.relpath(fpath, repo_path)
                 for op in _layer1_regex_scan(rel, content):
                     _add(op)
-            except (OSError, PermissionError):
-                pass
+            except (OSError, PermissionError) as e:
+                print(f"  [warn] skipping {fpath}: {e}")
     print(f"    Found {len(all_outputs)} outputs from regex")
 
     # Layer 2: AST scan (for files that Phase 1 already parsed)
@@ -496,8 +496,8 @@ def identify_outputs(
                         op.confidence = "medium"
                         _add(op)
                         ast_count += 1
-                except (OSError, PermissionError):
-                    pass
+                except (OSError, PermissionError) as e:
+                    print(f"  [warn] skipping {fpath}: {e}")
     print(f"    Found {ast_count} additional from AST")
 
     # Layer 3: SQL output analysis

@@ -7,6 +7,7 @@ Works with any OpenAI-compatible endpoint:
 """
 
 import json as _json
+import time as _time
 
 import httpx
 
@@ -91,10 +92,10 @@ class LLMClient:
         base_url: str = "http://127.0.0.1:1234/v1",
         model: str = "qwen3.5-35b-a3b",
         api_key: str | None = None,
-    temperature: float = 0.1,
-    max_tokens: int = 16384,
-    timeout: float = 300.0,
-    max_retries: int = 3,
+        temperature: float = 0.1,
+        max_tokens: int = 16384,
+        timeout: float = 300.0,
+        max_retries: int = 3,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -103,6 +104,7 @@ class LLMClient:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_retries = max_retries
+        self._client = httpx.Client(timeout=self.timeout, headers=self._headers())
 
     def _headers(self) -> dict[str, str]:
         """Build HTTP headers, including auth when api_key is set."""
@@ -117,15 +119,13 @@ class LLMClient:
         Handles both plain JSON and SSE-formatted responses transparently.
         Retries on transient failures (timeout, connection, 5xx).
         """
-        import time as _time
         last_err = None
         for attempt in range(self.max_retries):
             try:
-                resp = httpx.post(
+                resp = self._client.post(
                     f"{self.base_url}/chat/completions",
                     json=payload,
                     headers=self._headers(),
-                    timeout=self.timeout,
                 )
                 resp.raise_for_status()
                 text = resp.text
@@ -146,6 +146,8 @@ class LLMClient:
                     _time.sleep(wait)
                 else:
                     raise
+        if last_err is None:
+            raise RuntimeError("All retry attempts exhausted before any request was made")
         raise last_err
 
     def chat(
@@ -162,8 +164,8 @@ class LLMClient:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": temperature or self.temperature,
-            "max_tokens": max_tokens or self.max_tokens,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
         })
         return _extract_content(data)
 
@@ -177,19 +179,28 @@ class LLMClient:
         data = self._post_chat({
             "model": self.model,
             "messages": messages,
-            "temperature": temperature or self.temperature,
-            "max_tokens": max_tokens or self.max_tokens,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
         })
         return _extract_content(data)
 
     def health_check(self) -> bool:
         """Check if the LLM endpoint is reachable."""
         try:
-            resp = httpx.get(
+            resp = self._client.get(
                 f"{self.base_url}/models",
                 headers=self._headers(),
-                timeout=min(15, self.timeout),
             )
             return resp.status_code == 200
         except Exception:
             return False
+
+    def close(self):
+        """Close the underlying HTTP client."""
+        self._client.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()

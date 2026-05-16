@@ -251,8 +251,9 @@ def _basic_md_to_html(content: str) -> str:
             flush_para()
             flush_list()
             level = len(hm.group(1))
-            text = _inline_format(hm.group(2).strip())
-            anchor = _make_anchor(hm.group(2).strip())
+            raw_text = hm.group(2).strip()
+            text = _inline_format(html.escape(raw_text))
+            anchor = html.escape(_make_anchor(raw_text), quote=True)
             html_parts.append(f'<h{level} id="{anchor}">{text}</h{level}>')
             continue
 
@@ -848,7 +849,7 @@ document.addEventListener('DOMContentLoaded', function() {{
     mermaid.initialize({{
       startOnLoad: true,
       theme: 'default',
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }});
   }}

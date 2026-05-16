@@ -270,6 +270,12 @@ def run_phase25(
             dispatch_str = "\n".join(dt_lines)
     
     # Load per-module data (structure + Phase 2 analyses)
+    from cross_validation import (
+        build_ground_truth, build_structured_context,
+        build_validation_summary,
+    )
+    from pipeline_improvements import enhanced_validate
+
     modules_dir = analysis_dir / "modules"
     module_data = []
     if modules_dir.exists():
@@ -278,12 +284,7 @@ def run_phase25(
                 module_data.append(json.load(fh))
 
     # Build ground truth from Phase 1
-            from cross_validation import (
-                build_ground_truth, build_structured_context,
-                build_validation_summary,
-            )
-            from pipeline_improvements import enhanced_validate
-            ground_truth = build_ground_truth(struct_data, module_data)
+    ground_truth = build_ground_truth(struct_data, module_data)
 
     # Build structured context (replaces truncated text summaries)
     structured_ctx = build_structured_context(struct_data, module_data, ground_truth)

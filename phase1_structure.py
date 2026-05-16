@@ -933,8 +933,8 @@ def analyze_file(filepath: str, repo_root: str) -> FileAnalysis:
         try:
             source_text = source.decode("utf-8", errors="ignore")
             sql_stmts = _extract_embedded_sql(rel, source_text)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [warn] embedded SQL extraction failed for {rel}: {e}")
 
     # Spark cross-reference for Scala/Java files
     spark_ref = []
@@ -944,8 +944,8 @@ def analyze_file(filepath: str, repo_root: str) -> FileAnalysis:
             spark_data = _extract_spark_cross_ref(rel, source_text)
             if spark_data.get("udfs") or spark_data.get("xml_loaders"):
                 spark_ref = [spark_data]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [warn] Spark cross-ref extraction failed for {rel}: {e}")
 
     return FileAnalysis(
         path=rel, language=lang,

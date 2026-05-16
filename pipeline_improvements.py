@@ -215,7 +215,7 @@ def enhanced_validate(
     llm_output: str,
     ground_truth: dict,
     module_data: list[dict] = None,
-) -> dict:
+) -> "ValidationResult":
     """Enhanced cross-validation with fuzzy matching and indirect call handling.
 
     Improvements over basic validate_cross_module_calls:
