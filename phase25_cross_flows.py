@@ -278,11 +278,12 @@ def run_phase25(
                 module_data.append(json.load(fh))
 
     # Build ground truth from Phase 1
-    from cross_validation import (
-        build_ground_truth, build_structured_context,
-        validate_cross_module_calls, build_validation_summary,
-    )
-    ground_truth = build_ground_truth(struct_data, module_data)
+            from cross_validation import (
+                build_ground_truth, build_structured_context,
+                build_validation_summary,
+            )
+            from pipeline_improvements import enhanced_validate
+            ground_truth = build_ground_truth(struct_data, module_data)
 
     # Build structured context (replaces truncated text summaries)
     structured_ctx = build_structured_context(struct_data, module_data, ground_truth)
@@ -313,7 +314,7 @@ def run_phase25(
         response = fix_mermaid_syntax(response)
 
         # Cross-validate against ground truth
-        validation = validate_cross_module_calls(response, ground_truth)
+        validation = enhanced_validate(response, ground_truth, module_data)
         val_summary = build_validation_summary(validation)
         verified = len(validation.verified_calls)
         total = verified + len(validation.unverified_calls)
@@ -326,18 +327,20 @@ def run_phase25(
             if validation.accuracy_score >= REFINE_THRESHOLD or not validation.unverified_calls:
                 break
 
-            from accuracy import create_refinement_prompt
-            unverified_names = [c["name"] for c in validation.unverified_calls[:10]]
-            errors = [f"函数 `{n}` 在调用图和符号表中未找到" for n in unverified_names]
+            from pipeline_improvements import build_structured_refinement_prompt
+            errors = [f"函数 `{c['name']}` 在调用图和符号表中未找到"
+                      for c in validation.unverified_calls[:10]]
 
             print(f"  [Refine {refine_iter+1}] Accuracy {validation.accuracy_score:.0%} < {REFINE_THRESHOLD:.0%}, "
                   f"correcting {len(errors)} errors ...")
 
-            refine_prompt = create_refinement_prompt(response, errors, structured_ctx)
+            refine_prompt = build_structured_refinement_prompt(
+                response, validation, structured_ctx,
+            )
             try:
                 response = llm.chat(system=CROSS_FLOW_SYSTEM, user=refine_prompt, max_tokens=8192)
                 response = fix_mermaid_syntax(response)
-                validation = validate_cross_module_calls(response, ground_truth)
+                validation = enhanced_validate(response, ground_truth, module_data)
                 val_summary = build_validation_summary(validation)
                 verified = len(validation.verified_calls)
                 total = verified + len(validation.unverified_calls)
