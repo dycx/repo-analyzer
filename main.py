@@ -108,10 +108,12 @@ def build_symbol_index(files: list[dict]) -> str:
     return "\n".join(lines) if lines else "(no symbols extracted)"
 
 
-def build_source_preview(files: list[dict], repo_path: str, max_tokens_approx: int = 20000) -> str:
+def build_source_preview(files: list[dict], repo_path: str, max_tokens_approx: int = 4000) -> str:
     """Build source code preview, respecting context limits.
 
     Approximate 1 token ≈ 4 chars for English/Chinese mix.
+    Default 4000 tokens to fit models with smaller context windows (8K+).
+    Increase to 8000-12000 for models with 32K+ context.
     """
     max_chars = max_tokens_approx * 4
     parts = []
@@ -156,177 +158,194 @@ def build_source_preview(files: list[dict], repo_path: str, max_tokens_approx: i
 def fix_mermaid_syntax(content: str) -> str:
     """Post-process all Mermaid blocks to fix common LLM-generated syntax issues.
 
-    Problems fixed:
-    1. Unquoted parentheses in node labels: NODE[text (stuff)] → NODE["text stuff"]
-    2. Unquoted parentheses in edge labels: -->|text (stuff)| → -->|text stuff|
-    3. Bare parentheses in edge arrows: -- "text (stuff)" --> -- "text stuff" -->
-    4. Assignment in diamond labels: {"x = true"} → {"x is true"}
-    5. Assignment in square labels: ["x = true"] → ["set x to true"]
-    6. break without matching end → inject end
-    7. Unquoted edge labels with special chars: -->|text (x)| → -->|"text (x)"|
-    8. Nested quotes in sequence diagram messages: func(a="b") → func(a=b)
-    9. subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
-    10. URL protocol in labels: ["https://x"] → ["x"]
-    11. Reserved word "end" as label: A["end"] → A["End"]
-    12. Node IDs starting with o/x after ---: A---ops → A--- ops
-    13. Semicolons in sequence messages: func(a;b) → func(a#59;b)
-
-    Mermaid interprets () as rounded-node syntax, so any literal parentheses
-    in labels must be inside quoted strings or removed.
+    Strategy: extract each mermaid block, fix it in isolation, then reassemble.
+    This avoids complex state-machine line tracking.
     """
     import re
-    lines = content.split('\n')
+
+    # Split content into mermaid blocks and non-mermaid text
+    parts = []
+    remaining = content
+    block_idx = 0
+
+    while True:
+        # Find next mermaid block
+        start = remaining.find('```mermaid')
+        if start == -1:
+            parts.append(remaining)
+            break
+
+        # Everything before the block is text
+        parts.append(remaining[:start])
+
+        # Find the closing ```
+        end_start = remaining.find('```', start + 10)
+        if end_start == -1:
+            # Unclosed mermaid block — keep as-is
+            parts.append(remaining[start:])
+            break
+
+        # Extract the mermaid block content (between opening and closing tags)
+        block_content = remaining[start + 10:end_start]
+        block_end = end_start + 3
+
+        # Fix the block content
+        fixed_block = _fix_single_mermaid_block(block_content)
+
+        # Reconstruct the mermaid block
+        parts.append(f'```mermaid\n{fixed_block}\n```')
+
+        remaining = remaining[block_end:]
+        block_idx += 1
+
+    result = ''.join(parts)
+
+    # Wrap each mermaid block in <details> for collapsibility
+    result = _wrap_mermaid_in_details(result)
+
+    orig_count = content.count('```mermaid')
+    if result != content:
+        print(f"  [Mermaid fix] {orig_count} blocks processed, syntax issues auto-corrected")
+    return result
+
+
+def _fix_single_mermaid_block(block: str) -> str:
+    """Fix syntax issues within a single mermaid block (without the ``` fences)."""
+    import re
+
+    lines = block.split('\n')
     result = []
-    in_mermaid = False
-    mermaid_type = None  # "flowchart" or "sequence"
+    mermaid_type = None
     sg_counter = 0
-    # Track open blocks that need closing
-    open_blocks: list[str] = []  # stack of block types: "alt", "loop", "opt", "break", "par"
+    open_blocks = []
 
     for line in lines:
         stripped = line.strip()
 
-        if stripped.startswith('```mermaid'):
-            in_mermaid = True
-            mermaid_type = None
-            sg_counter = 0
-            open_blocks = []
-            result.append(line)
-            continue
+        # Detect diagram type
+        if mermaid_type is None:
+            if 'flowchart' in stripped or 'graph ' in stripped:
+                mermaid_type = "flowchart"
+            elif 'sequenceDiagram' in stripped:
+                mermaid_type = "sequence"
 
-        if stripped == '```' and in_mermaid:
-            # Close any unclosed blocks before ending
-            while open_blocks:
+        if mermaid_type == "flowchart":
+            line = _fix_flowchart_line(line, sg_counter)
+            # Track subgraph counter
+            if re.match(r'\s*subgraph\s+"', line):
+                sg_counter += 1
+                line = re.sub(
+                    r'(\s*)subgraph\s+"([^"]+)"',
+                    lambda m: f'{m.group(1)}subgraph sg{sg_counter} ["{m.group(2)}"]',
+                    line,
+                )
+        elif mermaid_type == "sequence":
+            line = _fix_sequence_line(line, stripped)
+            # Track open blocks
+            block_start = re.match(r'\s*(alt|opt|loop|break|par)\b', stripped)
+            if block_start:
+                open_blocks.append(block_start.group(1))
+            if stripped == 'end' and open_blocks:
                 open_blocks.pop()
-                result.append("    end")
-            in_mermaid = False
-            result.append(line)
-            continue
 
-        if in_mermaid:
-            # Detect diagram type
-            if mermaid_type is None:
-                if 'flowchart' in stripped or 'graph ' in stripped:
-                    mermaid_type = "flowchart"
-                elif 'sequenceDiagram' in stripped:
-                    mermaid_type = "sequence"
+        result.append(line)
 
-            if mermaid_type == "flowchart":
-                # 1. Fix unquoted parentheses in [...] node labels
-                #    NODE[text (stuff)] → NODE["text stuff"]
-                line = re.sub(
-                    r'(\w+)\[([^"\]]*?)\(([^)]*?)\)([^"\]]*?)\]',
-                    lambda m: f'{m.group(1)}["{m.group(2)}{m.group(3)}{m.group(4)}"]',
-                    line,
-                )
+    # Close any unclosed blocks
+    while open_blocks:
+        open_blocks.pop()
+        result.append("    end")
 
-                # 2. Fix unquoted parentheses in {...} decision nodes
-                #    NODE{text (stuff)} → NODE{"text stuff"}
-                line = re.sub(
-                    r'(\w+)\{([^"}]*?)\(([^)]*?)\)([^"}]*?)\}',
-                    lambda m: f'{m.group(1)}{{"{m.group(2)}{m.group(3)}{m.group(4)}"}}',
-                    line,
-                )
+    return '\n'.join(result)
 
-                # 3. Fix parentheses in edge labels: -->|text (stuff)| → -->|text stuff|
-                line = re.sub(
-                    r'\|([^|]*?)\(([^)]*?)\)([^|]*?)\|',
-                    lambda m: f'|{m.group(1)}{m.group(2)}{m.group(3)}|',
-                    line,
-                )
 
-                # 4. Fix parentheses in quoted edge arrows: -- "text (stuff) " -->
-                line = re.sub(
-                    r'-- "?([^"]*?)\(([^)]*?)\)([^"]*?)"?\s*-->',
-                    lambda m: f'-- "{m.group(1)}{m.group(2)}{m.group(3)}" -->',
-                    line,
-                )
+def _fix_flowchart_line(line: str, sg_counter: int) -> str:
+    """Fix syntax issues in a flowchart line."""
+    import re
 
-                # 5. Fix assignment in diamond: {"x = true"} → {"x is true"}
-                line = re.sub(
-                    r'(\w+)\{([^"}]*?)\s*=\s*("[^"]*"|true|false|null|nil)\}',
-                    lambda m: f'{m.group(1)}{{"{m.group(2).strip()} is {m.group(3).strip(chr(34))}"}}',
-                    line,
-                )
+    # 1. Unquoted parentheses in [...] node labels
+    line = re.sub(
+        r'(\w+)\[([^"\]]*?)\(([^)]*?)\)([^"\]]*?)\]',
+        lambda m: f'{m.group(1)}["{m.group(2)}{m.group(3)}{m.group(4)}"]',
+        line,
+    )
 
-                # 6. Fix assignment in square brackets: ["x = true"] → ["set x to true"]
-                line = re.sub(
-                    r'(\w+)\["([^"]*?)\s*=\s*([^"]*?)"\]',
-                    lambda m: f'{m.group(1)}["set {m.group(2).strip()} to {m.group(3).strip()}"]',
-                    line,
-                )
+    # 2. Unquoted parentheses in {...} decision nodes
+    line = re.sub(
+        r'(\w+)\{([^"}]*?)\(([^)]*?)\)([^"}]*?)\}',
+        lambda m: f'{m.group(1)}{{"{m.group(2)}{m.group(3)}{m.group(4)}"}}',
+        line,
+    )
 
-                # 7. Fix reserved word "end" used as label
-                #    A["end"] → A["End"]  (capitalize to avoid reserved word)
-                line = re.sub(
-                    r'(\w+)\["end"\]',
-                    lambda m: f'{m.group(1)}["End"]',
-                    line,
-                )
-                line = re.sub(
-                    r'(\w+)\("end"\)',
-                    lambda m: f'{m.group(1)}("End")',
-                    line,
-                )
-                line = re.sub(
-                    r"(\w+)\{'end'\}",
-                    lambda m: f'{m.group(1)}{{"End"}}',
-                    line,
-                )
+    # 3. Parentheses in edge labels
+    line = re.sub(
+        r'\|([^|]*?)\(([^)]*?)\)([^|]*?)\|',
+        lambda m: f'|{m.group(1)}{m.group(2)}{m.group(3)}|',
+        line,
+    )
 
-                # 8. Fix node IDs starting with o/x after --- (circle/cross edge trap)
-                #    A---ops → A--- ops
-                line = re.sub(
-                    r'(---+)([ox][a-z])',
-                    lambda m: f'{m.group(1)} {m.group(2)}',
-                    line,
-                )
+    # 4. Parentheses in edge arrows
+    line = re.sub(
+        r'-- "?([^"]*?)\(([^)]*?)\)([^"]*?)"?\s*-->',
+        lambda m: f'-- "{m.group(1)}{m.group(2)}{m.group(3)}" -->',
+        line,
+    )
 
-                # 9. Fix subgraph without ID: subgraph "Title" → subgraph sg1 ["Title"]
-                if re.match(r'\s*subgraph\s+"', line):
-                    sg_counter += 1
-                    line = re.sub(
-                        r'(\s*)subgraph\s+"([^"]+)"',
-                        lambda m: f'{m.group(1)}subgraph sg{sg_counter} ["{m.group(2)}"]',
-                        line,
-                    )
+    # 5. Assignment in diamond
+    line = re.sub(
+        r'(\w+)\{([^"}]*?)\s*=\s*("[^"]*"|true|false|null|nil)\}',
+        lambda m: f'{m.group(1)}{{"{m.group(2).strip()} is {m.group(3).strip(chr(34))}"}}',
+        line,
+    )
 
-            elif mermaid_type == "sequence":
-                # 10. Fix nested quotes in messages: func(a="b") → func(a=b)
-                line = re.sub(
-                    r'(->>|-->>)\s*(.*)\s*=\s*"([^"]*)"',
-                    lambda m: f'{m.group(1)} {m.group(2)}={m.group(3)}',
-                    line,
-                )
+    # 6. Assignment in square brackets
+    line = re.sub(
+        r'(\w+)\["([^"]*?)\s*=\s*([^"]*?)"\]',
+        lambda m: f'{m.group(1)}["set {m.group(2).strip()} to {m.group(3).strip()}"]',
+        line,
+    )
 
-                # 11. Escape semicolons in messages (they act as line breaks)
-                if ':' in line and not line.strip().startswith('%%'):
-                    line = re.sub(
-                        r'(->>|-->>|->>|-->>)([^:]+):.*;(.*)',
-                        lambda m: m.group(0).replace(';', '#59;'),
-                        line,
-                    )
+    # 7. Reserved word "end"
+    line = re.sub(r'(\w+)\["end"\]', lambda m: f'{m.group(1)}["End"]', line)
+    line = re.sub(r'(\w+)\("end"\)', lambda m: f'{m.group(1)}("End")', line)
 
-                # 12. Track open blocks for sequence diagrams
-                block_start = re.match(
-                    r'\s*(alt|opt|loop|break|par)\b', stripped
-                )
-                if block_start:
-                    block_type = block_start.group(1)
-                    open_blocks.append(block_type)
+    # 8. o/x after ---
+    line = re.sub(
+        r'(---+)([ox][a-z])',
+        lambda m: f'{m.group(1)} {m.group(2)}',
+        line,
+    )
 
-                if stripped == 'end' and open_blocks:
-                    open_blocks.pop()
+    # 9. Subgraph without ID
+    if re.match(r'\s*subgraph\s+"', line):
+        line = re.sub(
+            r'(\s*)subgraph\s+"([^"]+)"',
+            lambda m: f'{m.group(1)}subgraph sg{sg_counter} ["{m.group(2)}"]',
+            line,
+        )
 
-    fixed = '\n'.join(result)
+    return line
 
-    # Wrap each mermaid block in <details> for collapsibility
-    fixed = _wrap_mermaid_in_details(fixed)
 
-    orig_mermaid = content.count('```mermaid')
-    if fixed != content:
-        print(f"  [Mermaid fix] {orig_mermaid} blocks processed, syntax issues auto-corrected")
-    return fixed
+def _fix_sequence_line(line: str, stripped: str) -> str:
+    """Fix syntax issues in a sequence diagram line."""
+    import re
+
+    # Nested quotes in messages
+    line = re.sub(
+        r'(->>|-->>)\s*(.*)\s*=\s*"([^"]*)"',
+        lambda m: f'{m.group(1)} {m.group(2)}={m.group(3)}',
+        line,
+    )
+
+    # Semicolons in messages
+    if ':' in stripped and not stripped.startswith('%%'):
+        line = re.sub(
+            r'(->>|-->>)([^:]+):.*;(.*)',
+            lambda m: m.group(0).replace(';', '#59;'),
+            line,
+        )
+
+    return line
 
 
 def _wrap_mermaid_in_details(content: str) -> str:
@@ -443,6 +462,7 @@ def run_phase2(
     llm: LLMClient,
     repo_name: str,
     identified_outputs: list[dict] = None,
+    context_size: int = 4000,
 ) -> dict[str, str]:
     """Run Phase 2: module-level LLM analysis."""
     print(f"\n[Phase 2] Module-level analysis (using {llm.model}) ...")
@@ -485,7 +505,7 @@ def run_phase2(
         print(f"  [{i+1}/{len(modules)}] Analyzing {mod_name} ({len(files)} files) ...", end="", flush=True)
 
         symbol_index = build_symbol_index(files)
-        source_code = build_source_preview(files, repo_path)
+        source_code = build_source_preview(files, repo_path, max_tokens_approx=context_size)
         file_count = len(files)
         callback_info = build_callback_info(mod)
 
@@ -891,7 +911,10 @@ def main():
     parser.add_argument("--retry", type=int, default=3,
                         help="Max retries on LLM request failure (default: 3)")
     parser.add_argument("--skip-tests", action="store_true", default=False,
-                        help="Skip test files during analysis (auto-detects pytest, JUnit, Jest, Go test, etc.)")
+                        help="Skip test files during analysis (auto-detects pytest, JUnit, Jest, etc.)")
+    parser.add_argument("--context-size", type=int, default=4000,
+                        help="Max tokens for source code preview per module (default: 4000). "
+                             "Increase for models with larger context (e.g., 12000 for 32K+ models).")
     args = parser.parse_args()
 
     # API key: CLI arg > env var
@@ -985,6 +1008,7 @@ def main():
             module_analyses = run_phase2(
                 str(repo_path), analysis_dir, llm, repo_name,
                 identified_outputs=identified_outputs,
+                context_size=args.context_size,
             )
         else:
             # Load existing analyses

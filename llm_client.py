@@ -58,8 +58,24 @@ def _parse_sse_response(text: str) -> dict:
 
 
 def _extract_content(data: dict) -> str:
-    """Extract assistant message content from a chat completion response."""
-    return data["choices"][0]["message"]["content"]
+    """Extract assistant message content from a chat completion response.
+
+    Handles both standard and reasoning models (qwen3, etc.) that put
+    output in 'reasoning_content' instead of 'content'.
+    """
+    msg = data["choices"][0]["message"]
+    content = msg.get("content", "")
+    reasoning = msg.get("reasoning_content", "")
+
+    # If content is empty but reasoning has the actual answer, use reasoning
+    if not content and reasoning:
+        return reasoning
+
+    # If both exist, prefer content
+    if content and reasoning:
+        return content
+
+    return content or ""
 
 
 def _is_sse(text: str) -> bool:
@@ -75,10 +91,10 @@ class LLMClient:
         base_url: str = "http://127.0.0.1:1234/v1",
         model: str = "qwen3.5-35b-a3b",
         api_key: str | None = None,
-        temperature: float = 0.1,
-        max_tokens: int = 8192,
-        timeout: float = 300.0,
-        max_retries: int = 3,
+    temperature: float = 0.1,
+    max_tokens: int = 16384,
+    timeout: float = 300.0,
+    max_retries: int = 3,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
