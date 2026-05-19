@@ -30,6 +30,11 @@ import sys
 import time
 from pathlib import Path
 
+if len(sys.argv) > 1 and sys.argv[1] == "trace":
+    from repo_analyzer.cli import main as package_main
+    package_main(sys.argv[1:])
+    raise SystemExit
+
 from llm_client import LLMClient
 from phase0_recon import run_phase0
 from phase1_structure import run_phase1

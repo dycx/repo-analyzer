@@ -24,6 +24,7 @@ class Config:
     skip_tests: bool = False
     skip_synthesis: bool = False
     force: bool = False
+    verbose: bool = False
 
     @property
     def repo_name(self) -> str:

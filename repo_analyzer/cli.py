@@ -70,12 +70,13 @@ def parse_args(argv: list[str] | None = None) -> Config:
         skip_tests=args.skip_tests,
         skip_synthesis=args.skip_synthesis,
         force=args.force,
+        verbose=args.verbose,
     )
 
 
 def run_pipeline(cfg: Config) -> None:
     """Execute the analysis pipeline based on config."""
-    setup_logging(verbose=False)
+    setup_logging(verbose=cfg.verbose)
 
     if not cfg.repo_path.is_dir():
         logger.error("Not a directory: %s", cfg.repo_path)
@@ -178,7 +179,14 @@ def _load_existing_analyses(analysis_dir: Path) -> dict[str, str]:
     return result
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """CLI entry point."""
-    cfg = parse_args()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "trace":
+        setup_logging(verbose=False)
+        from repo_analyzer.traces.pipeline import run_trace_command
+        run_trace_command(argv[1:])
+        return
+
+    cfg = parse_args(argv)
     run_pipeline(cfg)

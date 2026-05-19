@@ -52,6 +52,38 @@ python main.py /path/to/your/repo --phase 2-4
 python main.py /path/to/your/repo -o ~/analysis-output.md
 ```
 
+### 输出数据流 / 算法说明模式（新）
+
+如果目标是说明“输入数据如何经过计算得到输出文件/表”，使用 `trace` 模式：
+
+```bash
+# 生成按输出组织的数据流与算法说明
+python main.py trace /path/to/your/repo
+
+# 或使用包入口
+python -m repo_analyzer trace /path/to/your/repo
+
+# 自定义输出路径
+python main.py trace /path/to/your/repo -o ~/output-trace.md
+```
+
+`trace` 模式当前聚焦：
+
+- Java / Scala Spark 数据处理代码
+- Python Pandas / Spark 数据处理代码
+- SQL 文件与嵌入式 SQL
+- XML 配置中的 Spark SQL step
+- 文件输出、表输出、API 返回、消息发布等输出点
+
+输出报告按“输出物”组织，每个输出包含：
+
+- 输入来源
+- 输入到输出的处理流程
+- 过滤、字段选择、字段派生、Join、Group By、聚合等计算细节
+- 字段级计算规则（best effort）
+- 伪代码
+- 无法静态确认的上游引用
+
 ### 远程 LLM（Qwen / OpenAI 兼容）
 
 ```bash
